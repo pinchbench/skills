@@ -96,22 +96,76 @@ def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task) -> Path:
     return workspace
 
 
-def _load_transcript(agent_id: str, session_id: str) -> List[Dict[str, Any]]:
-    transcript_path = (
+def _resolve_session_id_from_store(agent_id: str) -> str | None:
+    sessions_store = (
         Path.home()
         / ".openclaw"
         / "agents"
         / agent_id
         / "sessions"
-        / f"{session_id}.jsonl"
+        / "sessions.json"
     )
-    for attempt in range(3):
-        if transcript_path.exists():
+    if not sessions_store.exists():
+        return None
+    try:
+        sessions_payload = json.loads(sessions_store.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        logger.warning("Failed to parse sessions store: %s", exc)
+        return None
+    if not isinstance(sessions_payload, dict):
+        return None
+
+    preferred_keys = [
+        f"agent:{agent_id}:main",
+        f"agent:{agent_id}:default",
+    ]
+    for key in preferred_keys:
+        entry = sessions_payload.get(key)
+        if isinstance(entry, dict) and entry.get("sessionId"):
+            return entry["sessionId"]
+
+    newest_entry = None
+    newest_timestamp = -1
+    for entry in sessions_payload.values():
+        if not isinstance(entry, dict):
+            continue
+        if "sessionId" not in entry:
+            continue
+        updated_at = entry.get("updatedAt")
+        if isinstance(updated_at, (int, float)) and updated_at > newest_timestamp:
+            newest_timestamp = updated_at
+            newest_entry = entry
+    if newest_entry:
+        return newest_entry.get("sessionId")
+    return None
+
+
+def _load_transcript(agent_id: str, session_id: str) -> List[Dict[str, Any]]:
+    session_ids = [session_id]
+    resolved_session_id = _resolve_session_id_from_store(agent_id)
+    if resolved_session_id and resolved_session_id not in session_ids:
+        session_ids.append(resolved_session_id)
+
+    transcript_path = None
+    for candidate in session_ids:
+        candidate_path = (
+            Path.home()
+            / ".openclaw"
+            / "agents"
+            / agent_id
+            / "sessions"
+            / f"{candidate}.jsonl"
+        )
+        for attempt in range(3):
+            if candidate_path.exists():
+                transcript_path = candidate_path
+                break
+            if attempt < 2:
+                time.sleep(0.5)
+        if transcript_path is not None:
             break
-        if attempt < 2:
-            time.sleep(0.5)
-    if not transcript_path.exists():
-        logger.warning("Transcript missing at %s", transcript_path)
+    if transcript_path is None or not transcript_path.exists():
+        logger.warning("Transcript missing at %s", candidate_path)
         return []
 
     transcript: List[Dict[str, Any]] = []
