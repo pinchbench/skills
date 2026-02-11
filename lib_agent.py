@@ -127,6 +127,12 @@ def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task, agent_id: s
     workspace.mkdir(parents=True, exist_ok=True)
 
     for file_spec in task.workspace_files:
+        if "content" in file_spec:
+            dest = workspace / file_spec["path"]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(file_spec["content"])
+            continue
+
         source = skill_dir / "fixtures" / file_spec["source"]
         dest = workspace / file_spec["dest"]
         dest.parent.mkdir(parents=True, exist_ok=True)
