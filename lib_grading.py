@@ -170,8 +170,10 @@ def _combine_grades(task: Task, auto_result: GradeResult, llm_result: GradeResul
     combined_score = (
         auto_result.score * auto_weight + llm_result.score * llm_weight
     ) / total_weight
-    breakdown = {**{f"automated.{k}": v for k, v in auto_result.breakdown.items()},
-                 **{f"llm_judge.{k}": v for k, v in llm_result.breakdown.items()}}
+    breakdown = {
+        **{f"automated.{k}": v for k, v in auto_result.breakdown.items()},
+        **{f"llm_judge.{k}": v for k, v in llm_result.breakdown.items()},
+    }
     notes = " | ".join(filter(None, [auto_result.notes, llm_result.notes]))
     return GradeResult(
         task_id=task.task_id,
@@ -278,14 +280,54 @@ def _parse_judge_response(transcript: List[Dict[str, Any]]) -> Dict[str, Any]:
     raw_text = "\n".join(content_chunks).strip()
     if not raw_text:
         return {}
-    json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-    if json_match:
-        raw_text = json_match.group(0)
-    try:
-        parsed = json.loads(raw_text)
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse judge JSON response")
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    return parsed
+
+    # First, try to extract JSON from code blocks (```json ... ```)
+    code_block_match = re.search(r"```json\s*(.*?)\s*```", raw_text, re.DOTALL)
+    if code_block_match:
+        try:
+            parsed = json.loads(code_block_match.group(1))
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    # Find all potential JSON objects by looking for balanced braces
+    # We'll extract chunks that start with { and try to parse them
+    json_candidates: List[str] = []
+    brace_depth = 0
+    current_json = []
+    for char in raw_text:
+        if char == "{":
+            if brace_depth == 0:
+                current_json = []
+            brace_depth += 1
+
+        if brace_depth > 0:
+            current_json.append(char)
+
+        if char == "}":
+            brace_depth -= 1
+            if brace_depth == 0 and current_json:
+                json_candidates.append("".join(current_json))
+
+    # Try parsing from the last JSON object backwards (most recent response)
+    for candidate in reversed(json_candidates):
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict) and "scores" in parsed:
+                # Prefer JSON that has the expected structure
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
+    # Try any valid JSON dict
+    for candidate in reversed(json_candidates):
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
+    logger.warning("Failed to parse judge JSON response")
+    return {}
