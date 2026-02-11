@@ -21,6 +21,15 @@ def slugify_model(model_id: str) -> str:
     return model_id.replace("/", "-").replace(".", "-")
 
 
+def normalize_model_id(model_id: str) -> str:
+    """Ensure model id is provider-qualified for OpenClaw."""
+    if "/" not in model_id:
+        return model_id
+    if model_id.startswith("openrouter/"):
+        return model_id
+    return f"openrouter/{model_id}"
+
+
 def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bool:
     """Ensure the OpenClaw agent exists. Returns True if created."""
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -40,6 +49,7 @@ def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bo
         logger.info("Agent %s already exists", agent_id)
         return False
 
+    normalized_model = normalize_model_id(model_id)
     logger.info("Creating OpenClaw agent %s", agent_id)
     try:
         create_result = subprocess.run(
@@ -49,7 +59,7 @@ def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bo
                 "add",
                 agent_id,
                 "--model",
-                model_id,
+                normalized_model,
                 "--workspace",
                 str(workspace_dir),
                 "--non-interactive",
@@ -138,6 +148,7 @@ def execute_openclaw_task(
     exit_code = -1
     timed_out = False
 
+    normalized_model = normalize_model_id(model_slug.replace("-", "/"))
     try:
         result = subprocess.run(
             [
@@ -145,6 +156,8 @@ def execute_openclaw_task(
                 "agent",
                 "--agent",
                 f"bench-{model_slug}",
+                "--model",
+                normalized_model,
                 "--session-id",
                 session_id,
                 "--message",
