@@ -25,6 +25,7 @@ from lib_agent import (
     execute_openclaw_task,
     slugify_model,
 )
+from lib_grading import grade_task
 from lib_tasks import Task, TaskLoader
 
 
@@ -246,6 +247,7 @@ def main():
 
     task_ids = _select_task_ids(runner.tasks, args.suite)
     results = []
+    grades_by_task_id = {}
 
     tasks_to_run = runner.tasks
     if task_ids is not None:
@@ -263,6 +265,8 @@ def main():
             timeout_multiplier=args.timeout_multiplier,
             skill_dir=skill_dir,
         )
+        grade = grade_task(task=task, execution_result=result, skill_dir=skill_dir)
+        grades_by_task_id[task.task_id] = grade
         results.append(result)
 
     output_dir = Path(args.output_dir)
@@ -279,6 +283,7 @@ def main():
                 "execution_time": result["execution_time"],
                 "transcript_length": len(result["transcript"]),
                 "workspace": result["workspace"],
+                "grading": grades_by_task_id[result["task_id"]].to_dict(),
             }
             for result in results
         ],

@@ -248,3 +248,73 @@ def execute_openclaw_task(
         "stdout": stdout,
         "stderr": stderr,
     }
+
+
+def run_openclaw_prompt(
+    *,
+    agent_id: str,
+    prompt: str,
+    workspace: Path,
+    timeout_seconds: float,
+) -> Dict[str, Any]:
+    """Run a single OpenClaw prompt for helper agents like the judge."""
+    start_time = time.time()
+    workspace.mkdir(parents=True, exist_ok=True)
+    session_id = f"judge_{int(time.time() * 1000)}"
+    stdout = ""
+    stderr = ""
+    exit_code = -1
+    timed_out = False
+
+    try:
+        result = subprocess.run(
+            [
+                "openclaw",
+                "agent",
+                "--agent",
+                agent_id,
+                "--session-id",
+                session_id,
+                "--message",
+                prompt,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(workspace),
+            timeout=timeout_seconds,
+            check=False,
+        )
+        stdout = result.stdout
+        stderr = result.stderr
+        exit_code = result.returncode
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+    except FileNotFoundError as exc:
+        stderr = f"openclaw command not found: {exc}"
+
+    transcript = _load_transcript(agent_id, session_id)
+    execution_time = time.time() - start_time
+
+    status = "success"
+    if timed_out:
+        status = "timeout"
+    if not transcript:
+        status = "error"
+    if exit_code not in (0, -1) and not timed_out:
+        status = "error"
+    if stderr and "openclaw command not found" in str(stderr):
+        status = "error"
+
+    return {
+        "agent_id": agent_id,
+        "status": status,
+        "transcript": transcript,
+        "workspace": str(workspace),
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "execution_time": execution_time,
+        "stdout": stdout,
+        "stderr": stderr,
+    }
