@@ -215,9 +215,9 @@ def _next_run_id(run_root: Path) -> str:
 
 def main():
     """Main entry point for the benchmark script."""
-    print("\n" + "🦀 "*20)
+    print("\n" + "🦀 "*25)
     logger.info("🚀 Starting PinchBench - OpenClaw Agent Benchmarking System")
-    print("🦀 "*20 + "\n")
+    print("🦀 "*25 + "\n")
     
     # Determine tasks directory
     script_dir = Path(__file__).parent
