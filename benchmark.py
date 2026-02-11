@@ -296,6 +296,7 @@ def main():
                 "timed_out": result["timed_out"],
                 "execution_time": result["execution_time"],
                 "transcript_length": len(result["transcript"]),
+                "usage": result.get("usage", {}),
                 "workspace": result["workspace"],
                 "grading": grades_by_task_id[result["task_id"]].to_dict(),
             }
