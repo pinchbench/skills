@@ -30,6 +30,39 @@ def normalize_model_id(model_id: str) -> str:
     return f"openrouter/{model_id}"
 
 
+def _get_agent_workspace(agent_id: str) -> Path | None:
+    """Get the workspace path for an agent from OpenClaw config."""
+    try:
+        list_result = subprocess.run(
+            ["openclaw", "agents", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if list_result.returncode != 0:
+            return None
+
+        # Parse the agent list output to find workspace
+        lines = list_result.stdout.split("\n")
+        found_agent = False
+        for line in lines:
+            if line.strip().startswith(f"- {agent_id}"):
+                found_agent = True
+            elif found_agent and "Workspace:" in line:
+                workspace_str = line.split("Workspace:")[1].strip()
+                # Expand ~ if present
+                if workspace_str.startswith("~/"):
+                    workspace_str = str(Path.home() / workspace_str[2:])
+                return Path(workspace_str)
+            elif found_agent and line.strip().startswith("-"):
+                # Found next agent, stop looking
+                break
+        return None
+    except Exception as exc:
+        logger.warning("Failed to get agent workspace: %s", exc)
+        return None
+
+
 def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bool:
     """Ensure the OpenClaw agent exists. Returns True if created."""
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -79,8 +112,18 @@ def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bo
     return True
 
 
-def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task) -> Path:
-    workspace = Path(f"/tmp/pinchbench/{run_id}/{task.task_id}")
+def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task, agent_id: str) -> Path:
+    """
+    Prepare workspace for a task by copying fixtures.
+    Uses the agent's configured workspace to ensure files are in the right place.
+    """
+    # Get agent's workspace from agent config
+    workspace = _get_agent_workspace(agent_id)
+    if workspace is None:
+        # Fallback to task-specific workspace if agent workspace not found
+        logger.warning("Could not find agent workspace, using fallback")
+        workspace = Path(f"/tmp/pinchbench/{run_id}/{task.task_id}")
+
     workspace.mkdir(parents=True, exist_ok=True)
 
     for file_spec in task.workspace_files:
@@ -187,7 +230,7 @@ def execute_openclaw_task(
     logger.info("   Category: %s", task.category)
 
     start_time = time.time()
-    workspace = prepare_task_workspace(skill_dir, run_id, task)
+    workspace = prepare_task_workspace(skill_dir, run_id, task, agent_id)
     session_id = f"{task.task_id}_{int(time.time() * 1000)}"
     timeout_seconds = task.timeout_seconds * timeout_multiplier
     stdout = ""
