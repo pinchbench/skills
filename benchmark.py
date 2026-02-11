@@ -212,15 +212,29 @@ def _next_run_id(run_root: Path) -> str:
     return f"{next_id:04d}"
 
 
+def _load_ascii_art(script_dir: Path, filename: str) -> str | None:
+    """Load ASCII art from a local file if available."""
+    art_path = script_dir / filename
+    try:
+        return art_path.read_text(encoding="utf-8").rstrip("\n")
+    except FileNotFoundError:
+        return None
+
+
 def main():
     """Main entry point for the benchmark script."""
-    print("\n" + "🦀 " * 30)
-    logger.info("🚀 Starting PinchBench - OpenClaw Agent Benchmarking System")
-    print("🦀 " * 30 + "\n")
-
     # Determine tasks directory
     script_dir = Path(__file__).parent
     tasks_dir = script_dir / "tasks"
+
+    logger.info("🦞🦀🦐 PinchBench - OpenClaw Benchmarking")
+    ascii_crab = _load_ascii_art(script_dir, "crab.txt")
+    if ascii_crab:
+        print("\n" + ascii_crab + "\n")
+    else:
+        print("\n" + "🦀 " * 30)
+        print("🦀 " * 30 + "\n")
+    logger.info("🦞🦀🦐 Starting PinchBench 🦐🦀🦞")
 
     if not tasks_dir.exists():
         logger.error(f"❌ Tasks directory not found: {tasks_dir}")
