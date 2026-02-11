@@ -203,12 +203,6 @@ jq '{average_score: ([.tasks[].grading.score] | add / length)}' file.json
 jq '.tasks[] | select(.grading.passed == false) | {task_id, score: .grading.score}' file.json
 ```
 
-- Get the overall score for a run:
-
-```bash
-jq '[.tasks[].grading.score] | add / length' file.json
-```
-
 ## License
 
 See project license file.
