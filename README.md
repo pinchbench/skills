@@ -191,6 +191,12 @@ jq '.tasks[] | {task_id, passed: .grading.passed, score: .grading.score}' file.j
 jq '.tasks | sort_by(.grading.score)[] | {task_id, score: .grading.score}' file.json
 ```
 
+- Sort tasks by execution time (ascending):
+
+```bash
+jq '.tasks | sort_by(.execution_time)[] | {task_id, execution_time: .execution_time}' file.json
+```
+
 - Aggregate average score across tasks:
 
 ```bash

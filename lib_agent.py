@@ -222,6 +222,35 @@ def _load_transcript(agent_id: str, session_id: str) -> List[Dict[str, Any]]:
     return transcript
 
 
+def _extract_usage_from_transcript(transcript: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Sum token usage and cost from all assistant messages in transcript."""
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+    }
+
+    for entry in transcript:
+        if entry.get("type") != "message":
+            continue
+        msg = entry.get("message", {})
+        if msg.get("role") != "assistant":
+            continue
+        usage = msg.get("usage", {})
+        totals["input_tokens"] += usage.get("input", 0)
+        totals["output_tokens"] += usage.get("output", 0)
+        totals["cache_read_tokens"] += usage.get("cacheRead", 0)
+        totals["cache_write_tokens"] += usage.get("cacheWrite", 0)
+        totals["total_tokens"] += usage.get("totalTokens", 0)
+        cost = usage.get("cost", {})
+        totals["cost_usd"] += cost.get("total", 0.0)
+
+    return totals
+
+
 def execute_openclaw_task(
     *,
     task: Task,
@@ -273,6 +302,7 @@ def execute_openclaw_task(
         stderr = f"openclaw command not found: {exc}"
 
     transcript = _load_transcript(agent_id, session_id)
+    usage = _extract_usage_from_transcript(transcript)
     execution_time = time.time() - start_time
 
     status = "success"
@@ -290,6 +320,7 @@ def execute_openclaw_task(
         "task_id": task.task_id,
         "status": status,
         "transcript": transcript,
+        "usage": usage,
         "workspace": str(workspace),
         "exit_code": exit_code,
         "timed_out": timed_out,
