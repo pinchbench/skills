@@ -184,7 +184,7 @@ def execute_openclaw_task(
     *,
     task: Task,
     agent_id: str,
-    model_slug: str,
+    model_id: str,
     run_id: str,
     timeout_multiplier: float,
     skill_dir: Path,
@@ -202,14 +202,14 @@ def execute_openclaw_task(
     exit_code = -1
     timed_out = False
 
-    normalized_model = normalize_model_id(model_slug.replace("-", "/"))
+    normalized_model = normalize_model_id(model_id)
     try:
         result = subprocess.run(
             [
                 "openclaw",
                 "agent",
                 "--agent",
-                f"bench-{model_slug}",
+                agent_id,
                 "--model",
                 normalized_model,
                 "--session-id",

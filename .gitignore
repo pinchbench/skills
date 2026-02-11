@@ -62,3 +62,6 @@ dmypy.json
 
 # Project specific
 uv.lock
+
+# Vultr
+create_instance.sh

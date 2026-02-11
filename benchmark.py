@@ -258,7 +258,7 @@ def main():
         result = execute_openclaw_task(
             task=task,
             agent_id=agent_id,
-            model_slug=model_slug,
+            model_id=args.model,
             run_id=run_id,
             timeout_multiplier=args.timeout_multiplier,
             skill_dir=skill_dir,
