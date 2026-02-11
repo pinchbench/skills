@@ -304,7 +304,7 @@ def main():
         ],
     }
 
-    output_path = output_dir / f"{model_slug}_{run_id}.json"
+    output_path = output_dir / f"{run_id}_{model_slug}.json"
     output_path.write_text(json.dumps(aggregate, indent=2), encoding="utf-8")
 
     logger.info("Saved results to %s", output_path)
