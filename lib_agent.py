@@ -95,6 +95,11 @@ def _load_transcript(agent_id: str, session_id: str) -> List[Dict[str, Any]]:
         / "sessions"
         / f"{session_id}.jsonl"
     )
+    for attempt in range(3):
+        if transcript_path.exists():
+            break
+        if attempt < 2:
+            time.sleep(0.5)
     if not transcript_path.exists():
         logger.warning("Transcript missing at %s", transcript_path)
         return []

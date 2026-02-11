@@ -203,11 +203,21 @@ def _select_task_ids(tasks: List[Task], suite: str) -> Optional[List[str]]:
     return [task_id.strip() for task_id in suite.split(",") if task_id.strip()]
 
 
+def _next_run_id(run_root: Path) -> str:
+    run_root.mkdir(parents=True, exist_ok=True)
+    existing = []
+    for entry in run_root.iterdir():
+        if entry.is_dir() and entry.name.isdigit():
+            existing.append(int(entry.name))
+    next_id = (max(existing) + 1) if existing else 1
+    return f"{next_id:04d}"
+
+
 def main():
     """Main entry point for the benchmark script."""
-    print("\n" + "🎪 "*20)
+    print("\n" + "🦀 "*20)
     logger.info("🚀 Starting PinchBench - OpenClaw Agent Benchmarking System")
-    print("🎪 "*20 + "\n")
+    print("🦀 "*20 + "\n")
     
     # Determine tasks directory
     script_dir = Path(__file__).parent
@@ -226,7 +236,8 @@ def main():
     runner.load_tasks()
 
     model_slug = slugify_model(args.model)
-    run_id = str(int(time.time()))
+    run_root = Path("/tmp/pinchbench")
+    run_id = _next_run_id(run_root)
     skill_dir = script_dir
     agent_id = f"bench-{model_slug}"
     agent_workspace = Path(f"/tmp/pinchbench/{run_id}/workspace")
