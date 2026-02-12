@@ -74,6 +74,7 @@ def upload_results(
         "Content-Type": "application/json",
         "X-PinchBench-Token": resolved_token,
         "X-PinchBench-Version": payload.get("client_version", ""),
+        "User-Agent": "PinchBench/" + (payload.get("client_version") or "unknown"),
     }
     req = request.Request(endpoint, data=body, headers=headers, method="POST")
     try:
@@ -131,6 +132,7 @@ def register_token(
     body = json.dumps({}).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
+        "User-Agent": "PinchBench/" + _read_client_version(),
     }
     req = request.Request(endpoint, data=body, headers=headers, method="POST")
     try:
