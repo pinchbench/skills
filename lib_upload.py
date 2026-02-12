@@ -79,7 +79,13 @@ def upload_results(
     try:
         with request.urlopen(req, timeout=timeout_seconds) as resp:
             response_body = resp.read().decode("utf-8")
-            data = json.loads(response_body) if response_body else {}
+            if response_body:
+                try:
+                    data = json.loads(response_body)
+                except json.JSONDecodeError:
+                    data = {"status": "accepted"}
+            else:
+                data = {}
     except error.HTTPError as exc:
         try:
             error_body = exc.read().decode("utf-8")
@@ -90,11 +96,27 @@ def upload_results(
     except error.URLError as exc:
         raise UploadError(f"Upload failed (network): {exc.reason}") from exc
 
+    submission_id = data.get("submission_id")
+    if not submission_id:
+        submission_id = payload["submission_id"]
+    rank = data.get("rank")
+    if rank is not None:
+        try:
+            rank = int(rank)
+        except (TypeError, ValueError):
+            rank = None
+    percentile = data.get("percentile")
+    if percentile is not None:
+        try:
+            percentile = float(percentile)
+        except (TypeError, ValueError):
+            percentile = None
+
     return UploadResult(
-        status=data.get("status", "accepted"),
-        submission_id=data.get("submission_id", payload["submission_id"]),
-        rank=data.get("rank"),
-        percentile=data.get("percentile"),
+        status=str(data.get("status", "accepted")),
+        submission_id=str(submission_id),
+        rank=rank,
+        percentile=percentile,
         leaderboard_url=data.get("leaderboard_url"),
     )
 
