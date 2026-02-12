@@ -2,6 +2,8 @@
 
 A benchmarking system for evaluating OpenClaw agents across various tasks.
 
+![PinchBench terminal output](./pinchbench.png)
+
 ## Overview
 
 PinchBench loads task definitions from the `tasks/` directory and provides a framework for creating and benchmarking OpenClaw agents. Each task includes:
