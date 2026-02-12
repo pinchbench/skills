@@ -91,8 +91,6 @@ def grade(transcript: list, workspace_path: str) -> dict:
 ```
 ````
 
-````
-
 ## Current Tasks
 
 The system includes 10 benchmark tasks:
@@ -111,6 +109,7 @@ The system includes 10 benchmark tasks:
 ## Logging
 
 The script uses Python's built-in logging with:
+
 - Console output (INFO level)
 - File output to `benchmark.log`
 - Structured log messages for debugging
@@ -130,44 +129,6 @@ To extend the system:
 2. **Customize agent execution**: Adjust the [`execute_task`](benchmark.py:199) method in [`OpenClawAgent`](benchmark.py:189)
 3. **Tune grading**: Update grading logic and rubrics in task definitions
 4. **Report results**: Add downstream reporting for your benchmarks
-
-## Usage Examples
-
-### Load and display all tasks
-
-```python
-from pathlib import Path
-from benchmark import BenchmarkRunner
-
-runner = BenchmarkRunner(Path("tasks"))
-runner.load_tasks()
-runner.print_task_summary()
-````
-
-### Create an agent
-
-```python
-agent = runner.create_agent(
-    agent_id="my_agent_v1",
-    config={
-        'model': 'claude-3-opus',
-        'temperature': 0.7,
-    }
-)
-```
-
-### Run benchmark (when implemented)
-
-```python
-# Run on all tasks
-results = runner.run_benchmark(agent)
-
-# Run on specific tasks
-results = runner.run_benchmark(
-    agent,
-    task_ids=['task_01_calendar', 'task_02_stock']
-)
-```
 
 ## Results Exploration (jq)
 
