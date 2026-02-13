@@ -183,8 +183,27 @@ def _build_payload(results_path: Path) -> Dict[str, Any]:
     formatted_tasks: list[dict[str, Any]] = []
     for task in tasks:
         grading = task.get("grading", {})
-        score = float(grading.get("score", 0.0))
-        max_for_task = float(grading.get("max_score", 0.0))
+        runs = grading.get("runs", []) if isinstance(grading.get("runs", []), list) else []
+        if "score" in grading:
+            score = float(grading.get("score", 0.0))
+        else:
+            score = float(grading.get("mean", 0.0))
+
+        if "max_score" in grading:
+            max_for_task = float(grading.get("max_score", 0.0))
+        elif runs:
+            max_for_task = float(
+                max(
+                    (
+                        float(run.get("max_score", 0.0))
+                        for run in runs
+                        if isinstance(run, dict)
+                    ),
+                    default=0.0,
+                )
+            )
+        else:
+            max_for_task = 0.0
         total_score += score
         max_score += max_for_task
 
@@ -197,16 +216,30 @@ def _build_payload(results_path: Path) -> Dict[str, Any]:
         usage_summary["total_requests"] += int(usage.get("request_count", 0))
         usage_summary["total_cost_usd"] += cost_usd
 
+        grading_type = grading.get("grading_type")
+        if not grading_type and runs:
+            grading_type = runs[0].get("grading_type") if isinstance(runs[0], dict) else None
+        breakdown = grading.get("breakdown")
+        if breakdown is None and runs:
+            breakdown = runs[0].get("breakdown") if isinstance(runs[0], dict) else {}
+        if breakdown is None:
+            breakdown = {}
+        notes = grading.get("notes")
+        if notes is None and runs:
+            notes = runs[0].get("notes") if isinstance(runs[0], dict) else ""
+        if notes is None:
+            notes = ""
+
         formatted_tasks.append(
             {
                 "task_id": task.get("task_id"),
                 "score": score,
                 "max_score": max_for_task,
-                "grading_type": grading.get("grading_type"),
+                "grading_type": grading_type,
                 "timed_out": bool(task.get("timed_out")),
                 "execution_time_seconds": task.get("execution_time"),
-                "breakdown": grading.get("breakdown", {}),
-                "notes": grading.get("notes", ""),
+                "breakdown": breakdown,
+                "notes": notes,
                 "frontmatter": task.get("frontmatter", {}),
             }
         )
