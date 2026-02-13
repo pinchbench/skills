@@ -301,8 +301,8 @@ def main():
         sys.exit(1)
 
     args = _parse_args()
-    if not args.model and not args.register:
-        logger.error("Missing required argument: --model (unless using --register)")
+    if not args.model and not args.register and not args.upload:
+        logger.error("Missing required argument: --model (unless using --register or --upload)")
         sys.exit(2)
 
     if args.register:
