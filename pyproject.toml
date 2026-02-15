@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "pyyaml>=6.0.1",
     "fabric>=3.2.2",
+    "paramiko>=3.0.0",
 ]
 
 [project.optional-dependencies]

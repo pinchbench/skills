@@ -1,71 +1,109 @@
-# PinchBench - OpenClaw Agent Benchmarking System
+# PinchBench 🦀
 
-A benchmarking system for evaluating OpenClaw agents across various tasks.
+**A benchmark for testing your OpenClaw agents!**
+
+PinchBench helps you evaluate how well your OpenClaw agent and selected model can handle real-world tasks like calendar management, research, file operations, and multi-step workflows. It's designed to be easy to run and easy to extend.
 
 ![PinchBench terminal output](./pinchbench.png)
 
-## Overview
-
-PinchBench loads task definitions from the `tasks/` directory and provides a framework for creating and benchmarking OpenClaw agents. Each task includes:
-
-- Task metadata (ID, name, category, timeout)
-- User prompt
-- Expected behavior description
-- Grading criteria
-- Automated grading functions (where applicable)
-- LLM judge rubrics (where applicable)
-
 ## Quick Start
 
-Run the benchmark script using `uv` (no virtual environment setup needed):
+### Prerequisites
+
+- **Python 3.10+**
+- **[uv](https://docs.astral.sh/uv/)** - Fast Python package manager
+- **An OpenClaw instance** - You'll need access to an OpenClaw server to run agents
+
+### Run the Benchmark
 
 ```bash
-uv run benchmark.py
+# Run with your model of choice
+uv run benchmark.py --model anthropic/claude-sonnet-4
+
+# Run specific tasks
+uv run benchmark.py --model anthropic/claude-sonnet-4 --suite task_01_calendar,task_02_stock
+
+# Run only tasks with automated grading
+uv run benchmark.py --model anthropic/claude-sonnet-4 --suite automated-only
 ```
 
-This will:
+That's it! The benchmark will:
 
 1. Load all tasks from the `tasks/` directory
-2. Display a summary of loaded tasks
-3. Run the configured agent across the selected tasks and emit results
+2. Run your agent through each task
+3. Grade the results automatically (where possible)
+4. Save results to `/tmp/pinchbench/`
 
-## Script Features
+## Command Line Options
 
-### Task Loading
+| Option                 | Description                                                   |
+| ---------------------- | ------------------------------------------------------------- |
+| `--model`              | Model identifier (e.g., `anthropic/claude-sonnet-4`)          |
+| `--suite`              | Tasks to run: `all`, `automated-only`, or comma-separated IDs |
+| `--output-dir`         | Where to save results (default: `results/`)                   |
+| `--timeout-multiplier` | Scale task timeouts (useful for slower models)                |
+| `--runs`               | Number of runs per task for averaging                         |
+| `--no-upload`          | Skip uploading results to a leaderboard                       |
 
-The [`TaskLoader`](benchmark.py:89) class handles:
+## What Gets Tested
 
-- Reading task markdown files
-- Parsing YAML frontmatter
-- Extracting task sections (Prompt, Expected Behavior, Grading Criteria, etc.)
-- Creating structured [`Task`](benchmark.py:31) objects
+PinchBench includes 11 tasks that cover common agent capabilities:
 
-### Agent Runtime
+| Task               | Category     | Description                              |
+| ------------------ | ------------ | ---------------------------------------- |
+| `task_00_sanity`   | Basic        | Simple verification that the agent works |
+| `task_01_calendar` | Productivity | Calendar event creation                  |
+| `task_02_stock`    | Research     | Stock price lookup                       |
+| `task_03_blog`     | Writing      | Blog post creation                       |
+| `task_04_weather`  | Coding       | Weather script creation                  |
+| `task_05_summary`  | Analysis     | Document summarization                   |
+| `task_06_events`   | Research     | Tech conference research                 |
+| `task_07_email`    | Writing      | Professional email drafting              |
+| `task_08_memory`   | Memory       | Context retrieval                        |
+| `task_09_files`    | Files        | File structure creation                  |
+| `task_10_workflow` | Integration  | Multi-step API workflow                  |
 
-The [`OpenClawAgent`](benchmark.py:189) class provides:
+## Understanding Results
 
-- Agent initialization with configuration
-- Task execution interface
-- Result tracking structure
+Results are saved as JSON files containing:
 
-### Benchmark Runner
+```json
+{
+  "tasks": [
+    {
+      "task_id": "task_01_calendar",
+      "grading": {
+        "passed": true,
+        "score": 1.0
+      },
+      "execution_time": 45.2
+    }
+  ]
+}
+```
 
-The [`BenchmarkRunner`](benchmark.py:217) class orchestrates:
+### Quick Analysis with jq
 
-- Task loading and management
-- Agent creation
-- Benchmark execution across tasks
-- Result aggregation
+```bash
+# List all task scores
+jq '.tasks[] | {task_id, score: .grading.score}' results.json
 
-## Task Structure
+# Show failed tasks
+jq '.tasks[] | select(.grading.passed == false)' results.json
 
-Tasks are defined in markdown files with YAML frontmatter:
+# Calculate average score
+jq '{average_score: ([.tasks[].grading.score] | add / length)}' results.json
+```
+
+## Adding Your Own Tasks
+
+Create a new markdown file in `tasks/` following this structure:
 
 ````markdown
 ---
-id: task_01_example
-name: Example Task
-category: example
+id: task_my_task
+name: My Custom Task
+category: custom
 grading_type: automated
 timeout_seconds: 120
 workspace_files: []
@@ -73,11 +111,11 @@ workspace_files: []
 
 ## Prompt
 
-[User-facing task prompt]
+[What the user asks the agent to do]
 
 ## Expected Behavior
 
-[Description of expected agent behavior]
+[What a successful agent should do]
 
 ## Grading Criteria
 
@@ -88,90 +126,52 @@ workspace_files: []
 
 ```python
 def grade(transcript: list, workspace_path: str) -> dict:
-    # Grading logic
-    return scores
+    # Your grading logic
+    return {"score": 1.0, "passed": True}
 ```
 ````
 
-## Current Tasks
+````
 
-The system includes 10 benchmark tasks:
+See [`tasks/TASK_TEMPLATE.md`](tasks/TASK_TEMPLATE.md) for a complete template.
 
-1. **task_01_calendar** - Calendar Event Creation
-2. **task_02_stock** - Stock Price Research
-3. **task_03_blog** - Blog Post Writing
-4. **task_04_weather** - Weather Script Creation
-5. **task_05_summary** - Document Summarization
-6. **task_06_events** - Tech Conference Research
-7. **task_07_email** - Professional Email Drafting
-8. **task_08_memory** - Memory Retrieval from Context
-9. **task_09_files** - File Structure Creation
-10. **task_10_workflow** - Multi-step API Workflow
+## Connecting to Your OpenClaw Instance
 
-## Logging
+PinchBench expects your OpenClaw instance to be accessible via SSH. The connection is configured through environment variables or a config file. Check your OpenClaw documentation for setup details.
 
-The script uses Python's built-in logging with:
+## Contributing
 
-- Console output (INFO level)
-- File output to `benchmark.log`
-- Structured log messages for debugging
+We welcome contributions! Here's how to help:
 
-## Dependencies
+1. **Add tasks** - Create new benchmark tasks in `tasks/`
+2. **Improve grading** - Make our automated checks more robust
+3. **Fix bugs** - Check the issues tab
+4. **Documentation** - Help make this README even better
 
-- Python >= 3.10
-- PyYAML >= 6.0.1
-
-Dependencies are automatically managed by `uv` using inline script metadata.
-
-## Development
-
-To extend the system:
-
-1. **Add new tasks**: Create markdown files in `tasks/` following the template
-2. **Customize agent execution**: Adjust the [`execute_task`](benchmark.py:199) method in [`OpenClawAgent`](benchmark.py:189)
-3. **Tune grading**: Update grading logic and rubrics in task definitions
-4. **Report results**: Add downstream reporting for your benchmarks
-
-## Results Exploration (jq)
-
-Assuming you have a benchmark results JSON file, here are some helpful `jq` snippets:
-
-- List all task scores:
+### Development Setup
 
 ```bash
-jq '.tasks[] | {task_id, score: .grading.score}' file.json
-```
+# Clone the repo
+git clone https://github.com/your-org/pinchbench.git
+cd pinchbench
 
-- Show per-task pass/fail and total score:
+# Install dev dependencies
+uv sync --dev
 
-```bash
-jq '.tasks[] | {task_id, passed: .grading.passed, score: .grading.score}' file.json
-```
-
-- Sort tasks by score (ascending):
-
-```bash
-jq '.tasks | sort_by(.grading.score)[] | {task_id, score: .grading.score}' file.json
-```
-
-- Sort tasks by execution time (ascending):
-
-```bash
-jq '.tasks | sort_by(.execution_time)[] | {task_id, execution_time: .execution_time}' file.json
-```
-
-- Aggregate average score across tasks:
-
-```bash
-jq '{average_score: ([.tasks[].grading.score] | add / length)}' file.json
-```
-
-- Filter to failed tasks only:
-
-```bash
-jq '.tasks[] | select(.grading.passed == false) | {task_id, score: .grading.score}' file.json
-```
+# Run tests
+uv run pytest
+````
 
 ## License
 
-See project license file.
+This project is open source! See the [LICENSE](LICENSE) file for details.
+
+## Getting Help
+
+- **Issues** - File a bug or request a feature
+- **Discussions** - Ask questions and share ideas
+- **Documentation** - Check the `plans/` directory for design docs
+
+---
+
+Happy benchmarking! 🦀🦞🦐
