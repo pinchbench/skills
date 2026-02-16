@@ -232,39 +232,70 @@ def _find_recent_session_path(agent_dir: Path, started_at: float) -> Path | None
 
 
 def _load_transcript(agent_id: str, session_id: str, started_at: float) -> List[Dict[str, Any]]:
-    session_ids = [session_id]
-    resolved_session_id = _resolve_session_id_from_store(agent_id)
-    if resolved_session_id and resolved_session_id not in session_ids:
-        session_ids.append(resolved_session_id)
-
-    logger.info("Looking for sessions: %s (resolved: %s)", session_ids, resolved_session_id)
-
-    transcript_path = None
-    last_candidate_path = None
     agent_dir = _get_agent_store_dir(agent_id)
-    for candidate in session_ids:
-        candidate_path = (
-            agent_dir / "sessions" / f"{candidate}.jsonl"
-        )
-        last_candidate_path = candidate_path
-        for attempt in range(3):
-            if candidate_path.exists():
-                transcript_path = candidate_path
+    transcript_path = None
+
+    # OpenClaw ignores the --session-id we pass and generates its own UUID-based
+    # session ID internally.  We need to discover the actual transcript path.
+    #
+    # Strategy (with retries to handle write-delay):
+    #   1. Resolve the real session ID from sessions.json
+    #   2. Glob for any .jsonl in the sessions dir (most-recently-modified)
+    #   3. Try our passed-in session ID as a last resort
+    for attempt in range(6):
+        # 1. Try sessions.json first — OpenClaw writes the real UUID here
+        resolved_session_id = _resolve_session_id_from_store(agent_id)
+        if resolved_session_id:
+            candidate = agent_dir / "sessions" / f"{resolved_session_id}.jsonl"
+            if candidate.exists():
+                transcript_path = candidate
+                logger.info(
+                    "Found transcript via sessions.json: %s (attempt %s)",
+                    candidate.name,
+                    attempt + 1,
+                )
                 break
-            if attempt < 2:
-                time.sleep(0.5)
-        if transcript_path is not None:
-            break
-    if transcript_path is None:
-        if last_candidate_path:
-            logger.warning("Transcript missing at %s", last_candidate_path)
-        else:
-            logger.warning("No session IDs to check for transcript")
+
+        # 2. Glob fallback — pick the most recently modified .jsonl
         recent_path = _find_recent_session_path(agent_dir, started_at)
-        if recent_path is None:
-            return []
-        logger.info("Falling back to recent session transcript at %s", recent_path)
-        transcript_path = recent_path
+        if recent_path is not None:
+            transcript_path = recent_path
+            logger.info(
+                "Found transcript via glob fallback: %s (attempt %s)",
+                recent_path.name,
+                attempt + 1,
+            )
+            break
+
+        # 3. Try our passed-in session ID (unlikely to work, but check anyway)
+        direct_path = agent_dir / "sessions" / f"{session_id}.jsonl"
+        if direct_path.exists():
+            transcript_path = direct_path
+            logger.info(
+                "Found transcript via passed session ID: %s (attempt %s)",
+                direct_path.name,
+                attempt + 1,
+            )
+            break
+
+        if attempt < 5:
+            time.sleep(1.0)
+
+    if transcript_path is None:
+        sessions_dir = agent_dir / "sessions"
+        if sessions_dir.exists():
+            all_files = list(sessions_dir.iterdir())
+            logger.warning(
+                "Transcript not found for agent %s. Sessions dir contents: %s",
+                agent_id,
+                [f.name for f in all_files],
+            )
+        else:
+            logger.warning(
+                "Transcript not found — sessions dir does not exist: %s",
+                sessions_dir,
+            )
+        return []
 
     transcript: List[Dict[str, Any]] = []
     for line in transcript_path.read_text(encoding="utf-8").splitlines():
@@ -321,6 +352,10 @@ def execute_openclaw_task(
     logger.info("🤖 Agent [%s] starting task: %s", agent_id, task.task_id)
     logger.info("   Task: %s", task.name)
     logger.info("   Category: %s", task.category)
+
+    # Clean up previous session transcripts so we can reliably find this task's
+    # transcript (OpenClaw uses its own UUID-based naming, not our session ID).
+    cleanup_agent_sessions(agent_id)
 
     start_time = time.time()
     workspace = prepare_task_workspace(skill_dir, run_id, task, agent_id)
@@ -396,6 +431,10 @@ def run_openclaw_prompt(
     timeout_seconds: float,
 ) -> Dict[str, Any]:
     """Run a single OpenClaw prompt for helper agents like the judge."""
+    # Clean up previous session transcripts so we can reliably find this
+    # prompt's transcript (OpenClaw uses its own UUID-based naming).
+    cleanup_agent_sessions(agent_id)
+
     start_time = time.time()
     workspace.mkdir(parents=True, exist_ok=True)
     session_id = f"judge_{int(time.time() * 1000)}"
