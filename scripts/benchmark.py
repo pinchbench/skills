@@ -284,10 +284,11 @@ def main():
     """Main entry point for the benchmark script."""
     # Determine tasks directory
     script_dir = Path(__file__).parent
-    tasks_dir = script_dir / "tasks"
+    skill_root = script_dir.parent  # Parent of scripts/ is the skill root
+    tasks_dir = skill_root / "tasks"
 
     logger.info("🦞🦀🦐 PinchBench - OpenClaw Benchmarking")
-    ascii_crab = _load_ascii_art(script_dir, "crab.txt")
+    ascii_crab = _load_ascii_art(skill_root, "crab.txt")
     if ascii_crab:
         print("\n" + _colorize_gradient(ascii_crab) + "\n")
     else:
@@ -347,7 +348,7 @@ def main():
     model_slug = slugify_model(args.model)
     run_root = Path("/tmp/pinchbench")
     run_id = _next_run_id(run_root)
-    skill_dir = script_dir
+    skill_dir = skill_root
     agent_id = f"bench-{model_slug}"
     # Use a shared workspace for the agent - we'll copy fixtures per task
     agent_workspace = Path(f"/tmp/pinchbench/{run_id}/agent_workspace")
@@ -402,7 +403,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     aggregate = {
         "model": args.model,
-        "benchmark_version": _get_git_version(script_dir),
+        "benchmark_version": _get_git_version(skill_root),
         "run_id": run_id,
         "timestamp": time.time(),
         "suite": args.suite,

@@ -6,9 +6,9 @@ grading_type: automated # automated | llm_judge | hybrid
 timeout_seconds: 120
 workspace_files: []
 # workspace_files:
-#   - source: fixtures/sample.txt
+#   - source: assets/sample.txt
 #     dest: input.txt
-#   - source: fixtures/config.json
+#   - source: assets/config.json
 #     dest: config.json
 ---
 
@@ -228,15 +228,15 @@ def grade(transcript: list, workspace_path: str) -> dict:
 
 ```yaml
 workspace_files:
-  - source: fixtures/input_data.csv
+  - source: assets/input_data.csv
     dest: data.csv
-  - source: fixtures/config_template.json
+  - source: assets/config_template.json
     dest: config.json
 ```
 
 **Guidelines:**
 
-- `source`: Path relative to the skill's `fixtures/` directory
+- `source`: Path relative to the skill's `assets/` directory
 - `dest`: Path relative to the task workspace root
 - Keep fixture files minimal and focused on the task
 - Document any required file formats in Expected Behavior
@@ -270,4 +270,4 @@ Before submitting a new task, verify:
 - [ ] LLM judge rubric has explicit score levels (if applicable)
 - [ ] Weights in rubric sum to 100% (if applicable)
 - [ ] Timeout is reasonable for the task complexity
-- [ ] Workspace files are included in `fixtures/` (if needed)
+- [ ] Workspace files are included in `assets/` (if needed)

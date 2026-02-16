@@ -167,7 +167,7 @@ def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task, agent_id: s
             dest.write_text(file_spec["content"])
             continue
 
-        source = skill_dir / "fixtures" / file_spec["source"]
+        source = skill_dir / "assets" / file_spec["source"]
         dest = workspace / file_spec["dest"]
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:

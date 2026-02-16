@@ -65,5 +65,5 @@ uv.lock
 results/
 .pinchbench/
 
-# Vultr
-scripts/
+# Vultr deployment
+deploy/
