@@ -5,7 +5,7 @@ category: content_transformation
 grading_type: llm_judge
 timeout_seconds: 120
 workspace_files:
-  - source: fixtures/ai_blog.txt
+  - source: ai_blog.txt
     dest: ai_blog.txt
 ---
 
