@@ -9,13 +9,47 @@ import logging
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from lib_tasks import Task
 
 
 logger = logging.getLogger(__name__)
 MAX_OPENCLAW_MESSAGE_CHARS = 4000
+
+# Thinking levels supported by OpenClaw
+# See: https://docs.openclaw.ai/tools/thinking
+THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "adaptive")
+
+# Models that support xhigh thinking level (high reasoning budget)
+# Sourced from OpenClaw src/auto-reply/thinking.ts XHIGH_MODEL_REFS
+XHIGH_MODELS = {
+    # OpenAI
+    "openai/gpt-5.4",
+    "openai/gpt-5.4-pro",
+    "openai/gpt-5.2",
+    # OpenAI Codex
+    "openai-codex/gpt-5.4",
+    "openai-codex/gpt-5.3-codex",
+    "openai-codex/gpt-5.3-codex-spark",
+    "openai-codex/gpt-5.2-codex",
+    "openai-codex/gpt-5.1-codex",
+    # GitHub Copilot
+    "github-copilot/gpt-5.2-codex",
+    "github-copilot/gpt-5.2",
+}
+
+XHIGH_MODELS_LOWER = {model.lower() for model in XHIGH_MODELS}
+XHIGH_MODEL_IDS_LOWER = {model.split("/")[-1].lower() for model in XHIGH_MODELS}
+
+# Adaptive thinking is currently provider-managed for Anthropic Claude 4.6 models.
+ADAPTIVE_PROVIDER = "anthropic"
+ADAPTIVE_MODEL_PREFIXES = (
+    "claude-opus-4-6",
+    "claude-opus-4.6",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4.6",
+)
 
 
 def slugify_model(model_id: str) -> str:
@@ -29,6 +63,83 @@ def normalize_model_id(model_id: str) -> str:
     if model_id.startswith("openrouter/"):
         return model_id
     return f"openrouter/{model_id}"
+
+
+def supports_xhigh_thinking(model_id: str) -> bool:
+    """Check if a model supports xhigh thinking level."""
+    normalized = normalize_model_id(model_id).lower()
+    if normalized in XHIGH_MODELS_LOWER:
+        return True
+
+    # Handle openrouter/provider/model format.
+    parts = normalized.split("/")
+    if len(parts) == 3 and parts[0] == "openrouter":
+        provider_model = f"{parts[1]}/{parts[2]}"
+        if provider_model in XHIGH_MODELS_LOWER:
+            return True
+
+    # Only allow bare model-id fallback when the caller did not provide a provider.
+    if "/" not in model_id:
+        return model_id.lower() in XHIGH_MODEL_IDS_LOWER
+
+    return False
+
+
+def supports_adaptive_thinking(model_id: str) -> bool:
+    """Check if a model natively supports adaptive thinking."""
+    normalized = normalize_model_id(model_id).lower()
+    parts = normalized.split("/")
+
+    # openrouter/provider/model -> provider/model
+    if len(parts) == 3 and parts[0] == "openrouter":
+        provider = parts[1]
+        model = parts[2]
+    elif len(parts) >= 2:
+        provider = parts[-2]
+        model = parts[-1]
+    else:
+        return False
+
+    if provider != ADAPTIVE_PROVIDER:
+        return False
+
+    return any(model.startswith(prefix) for prefix in ADAPTIVE_MODEL_PREFIXES)
+
+
+def validate_thinking_level(level: str, model_id: Optional[str] = None) -> Optional[str]:
+    """
+    Validate a thinking level and check model compatibility.
+
+    Args:
+        level: The thinking level to validate
+        model_id: Optional model ID to check xhigh compatibility
+
+    Returns:
+        The validated level, or None if invalid
+    """
+    level_lower = level.lower().strip()
+    if level_lower not in THINKING_LEVELS:
+        logger.warning(
+            "Invalid thinking level '%s'. Valid levels: %s",
+            level,
+            ", ".join(THINKING_LEVELS),
+        )
+        return None
+    if level_lower == "xhigh" and model_id and not supports_xhigh_thinking(model_id):
+        logger.warning(
+            "Thinking level 'xhigh' not supported by model '%s'. "
+            "xhigh is only available for GPT-5.x model families.",
+            model_id,
+        )
+        return None
+    if level_lower == "adaptive" and model_id and not supports_adaptive_thinking(model_id):
+        logger.warning(
+            "Thinking level 'adaptive' is not natively supported by model '%s'. "
+            "adaptive is currently intended for Anthropic Claude 4.6 models.",
+            model_id,
+        )
+        return None
+    return level_lower
 
 
 def _get_agent_workspace(agent_id: str) -> Path | None:
@@ -394,10 +505,13 @@ def execute_openclaw_task(
     run_id: str,
     timeout_multiplier: float,
     skill_dir: Path,
+    thinking_level: Optional[str] = None,
 ) -> Dict[str, Any]:
     logger.info("🤖 Agent [%s] starting task: %s", agent_id, task.task_id)
     logger.info("   Task: %s", task.name)
     logger.info("   Category: %s", task.category)
+    if thinking_level:
+        logger.info("   Thinking: %s", thinking_level)
 
     # Clean up previous session transcripts so we can reliably find this task's
     # transcript (OpenClaw uses its own UUID-based naming, not our session ID).
@@ -413,17 +527,20 @@ def execute_openclaw_task(
     timed_out = False
 
     try:
+        cmd = [
+            "openclaw",
+            "agent",
+            "--agent",
+            agent_id,
+            "--session-id",
+            session_id,
+            "--message",
+            task.prompt,
+        ]
+        if thinking_level:
+            cmd.extend(["--thinking", thinking_level])
         result = subprocess.run(
-            [
-                "openclaw",
-                "agent",
-                "--agent",
-                agent_id,
-                "--session-id",
-                session_id,
-                "--message",
-                task.prompt,
-            ],
+            cmd,
             capture_output=True,
             text=True,
             cwd=str(workspace),
@@ -457,6 +574,7 @@ def execute_openclaw_task(
     return {
         "agent_id": agent_id,
         "task_id": task.task_id,
+        "thinking_level": thinking_level,
         "status": status,
         "transcript": transcript,
         "usage": usage,
@@ -475,6 +593,7 @@ def run_openclaw_prompt(
     prompt: str,
     workspace: Path,
     timeout_seconds: float,
+    thinking_level: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a single OpenClaw prompt for helper agents like the judge."""
     # Clean up previous session transcripts so we can reliably find this
@@ -519,17 +638,20 @@ def run_openclaw_prompt(
             timed_out = True
             break
         try:
+            cmd = [
+                "openclaw",
+                "agent",
+                "--agent",
+                agent_id,
+                "--session-id",
+                session_id,
+                "--message",
+                chunk,
+            ]
+            if thinking_level:
+                cmd.extend(["--thinking", thinking_level])
             result = subprocess.run(
-                [
-                    "openclaw",
-                    "agent",
-                    "--agent",
-                    agent_id,
-                    "--session-id",
-                    session_id,
-                    "--message",
-                    chunk,
-                ],
+                cmd,
                 capture_output=True,
                 text=True,
                 cwd=str(workspace),
