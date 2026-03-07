@@ -96,7 +96,12 @@ Many models support configurable thinking/reasoning levels. Test how different r
 ./scripts/run.sh --model anthropic/claude-sonnet-4 --thinking high
 ```
 
-Valid levels: `off`, `minimal`, `low`, `medium`, `high`
+Valid levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`
+
+**Model-specific notes:**
+- `xhigh` is only available for GPT-5.x models (gpt-5.4, gpt-5.2, codex variants)
+- `adaptive` is provider-managed reasoning budget (Anthropic Claude 4.6 family)
+- Invalid levels for your model are warned and skipped
 
 Results include a `thinking_aggregates` section with per-level statistics, and each task result includes the `thinking_level` used.
 

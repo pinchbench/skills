@@ -102,13 +102,16 @@ uv run benchmark.py --model anthropic/claude-sonnet-4 --thinking low,medium,high
 uv run benchmark.py --model anthropic/claude-sonnet-4 --thinking high
 ```
 
-Valid thinking levels: `off`, `minimal`, `low`, `medium`, `high`
+Valid thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`
+
+**Model-specific notes:**
+- `xhigh` is only supported by GPT-5.x models (gpt-5.4, gpt-5.2, codex variants)
+- `adaptive` is provider-managed reasoning (Anthropic Claude 4.6 family)
+- Invalid levels for your model are warned and skipped
 
 Results include per-level aggregates:
 - `thinking_aggregates`: Summary statistics for each thinking level
 - Per-task results include `thinking_level` field
-
-**Note:** Thinking levels are passed directly to OpenClaw's `--thinking` flag. Not all models support all levels.
 
 ## Results
 
