@@ -115,9 +115,27 @@ jobs:
           BENCHMARK_MODEL: ${{ matrix.model }}
         run: |
           # Create minimal OpenClaw config for benchmarking
+          # OpenClaw uses agents.defaults.model.primary, not defaultModel
           mkdir -p ~/.openclaw
-          # Use jq to safely interpolate the model name
-          jq -n --arg model "$BENCHMARK_MODEL" '{defaultModel: $model, providers: {}}' > ~/.openclaw/openclaw.json
+          cat > ~/.openclaw/openclaw.json << EOF
+          {
+            "agents": {
+              "defaults": {
+                "model": {
+                  "primary": "$BENCHMARK_MODEL"
+                }
+              }
+            },
+            "auth": {
+              "profiles": {
+                "openrouter:default": {
+                  "provider": "openrouter",
+                  "mode": "api_key"
+                }
+              }
+            }
+          }
+          EOF
 
       - name: Run benchmark
         id: benchmark
