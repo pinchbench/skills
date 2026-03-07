@@ -1,0 +1,226 @@
+name: Scheduled Benchmarks
+
+on:
+  schedule:
+    # Run daily at 6 AM UTC (1 AM EST)
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      models:
+        description: 'Comma-separated list of models to benchmark (leave empty for default set)'
+        required: false
+        type: string
+      suite:
+        description: 'Task suite to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - automated-only
+      upload:
+        description: 'Upload results to leaderboard'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  # Default models to benchmark on scheduled runs
+  # Edit this list to add/remove models from the rotation
+  DEFAULT_MODELS: |
+    anthropic/claude-sonnet-4
+    anthropic/claude-opus-4
+    openai/gpt-4o
+    openai/o3
+    google/gemini-2.5-pro
+    google/gemini-2.5-flash
+
+jobs:
+  # Build the Docker image with OpenClaw pre-installed
+  build-image:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/benchmark-runner
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.benchmark
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Parse the model list into a matrix
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Set matrix from inputs or defaults
+        id: set-matrix
+        run: |
+          if [ -n "${{ inputs.models }}" ]; then
+            # Manual trigger with specific models
+            MODELS="${{ inputs.models }}"
+          else
+            # Scheduled run - use defaults
+            MODELS=$(echo '${{ env.DEFAULT_MODELS }}' | tr '\n' ',' | sed 's/,$//')
+          fi
+          
+          # Convert comma-separated list to JSON array
+          JSON_ARRAY=$(echo "$MODELS" | tr ',' '\n' | sed '/^$/d' | jq -R . | jq -s -c .)
+          echo "matrix={\"model\":$JSON_ARRAY}" >> $GITHUB_OUTPUT
+          echo "Models to benchmark: $JSON_ARRAY"
+
+  # Run benchmarks for each model
+  benchmark:
+    needs: [build-image, prepare-matrix]
+    runs-on: ubuntu-latest
+    # For self-hosted runners, change to:
+    # runs-on: [self-hosted, benchmark]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+    container:
+      image: ghcr.io/${{ github.repository }}/benchmark-runner:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure OpenClaw
+        run: |
+          # Create minimal OpenClaw config for benchmarking
+          mkdir -p ~/.openclaw
+          cat > ~/.openclaw/openclaw.json << 'EOF'
+          {
+            "defaultModel": "${{ matrix.model }}",
+            "providers": {}
+          }
+          EOF
+
+      - name: Set up provider credentials
+        run: |
+          # OpenClaw reads these from environment
+          echo "Provider credentials configured from secrets"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+      - name: Run benchmark
+        id: benchmark
+        run: |
+          SUITE="${{ inputs.suite || 'all' }}"
+          UPLOAD_FLAG=""
+          if [ "${{ inputs.upload }}" = "false" ]; then
+            UPLOAD_FLAG="--no-upload"
+          fi
+          
+          ./scripts/run.sh \
+            --model "${{ matrix.model }}" \
+            --suite "$SUITE" \
+            --runs 1 \
+            --output-dir results \
+            $UPLOAD_FLAG
+          
+          # Find the results file
+          RESULTS_FILE=$(ls -t results/*.json | head -1)
+          echo "results_file=$RESULTS_FILE" >> $GITHUB_OUTPUT
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PINCHBENCH_TOKEN: ${{ secrets.PINCHBENCH_TOKEN }}
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ hashFiles(steps.benchmark.outputs.results_file) }}
+          path: results/*.json
+          retention-days: 90
+
+      - name: Parse and display results
+        if: always()
+        run: |
+          if [ -f "${{ steps.benchmark.outputs.results_file }}" ]; then
+            echo "## Benchmark Results: ${{ matrix.model }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Extract key metrics
+            jq -r '
+              "| Metric | Value |",
+              "|--------|-------|",
+              "| Tasks Run | \(.tasks | length) |",
+              "| Total Score | \([.tasks[].grading.mean] | add | . * 100 | round / 100) |",
+              "| Max Score | \(.tasks | length) |",
+              "| Run ID | \(.run_id) |"
+            ' "${{ steps.benchmark.outputs.results_file }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Aggregate results and notify
+  summarize:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results
+          pattern: results-*
+
+      - name: Generate summary
+        run: |
+          echo "## PinchBench Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Model | Score | Tasks | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          for dir in all-results/results-*; do
+            if [ -d "$dir" ]; then
+              for file in "$dir"/*.json; do
+                if [ -f "$file" ]; then
+                  jq -r '
+                    "| \(.model) | \([.tasks[].grading.mean] | add | . * 100 | round / 100)/\(.tasks | length) | \(.tasks | length) | ✅ |"
+                  ' "$file" >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "| (parse error) | - | - | ❌ |" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+            fi
+          done
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::warning::One or more benchmark runs failed. Check the job logs for details."
+          # Add Slack/Discord notification here if desired
+          # curl -X POST -H 'Content-type: application/json' \
+          #   --data '{"text":"PinchBench run had failures"}' \
+          #   ${{ secrets.SLACK_WEBHOOK_URL }}
