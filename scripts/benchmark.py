@@ -425,6 +425,21 @@ def main():
             task_grades.append(grade)
             results.append(result)
 
+            # Log score immediately after grading
+            score_pct = grade.score / grade.max_score * 100 if grade.max_score > 0 else 0
+            status_emoji = "✅" if grade.score >= grade.max_score else "⚠️" if grade.score > 0 else "❌"
+            logger.info(
+                "%s Task %s: %.1f/%.1f (%.0f%%) - %s",
+                status_emoji,
+                task.task_id,
+                grade.score,
+                grade.max_score,
+                score_pct,
+                grade.grading_type,
+            )
+            if grade.notes:
+                logger.info("   Notes: %s", grade.notes[:200])
+
         task_scores = [grade.score for grade in task_grades]
         grades_by_task_id[task.task_id] = {
             "runs": [grade.to_dict() for grade in task_grades],
