@@ -39,6 +39,18 @@ XHIGH_MODELS = {
     "github-copilot/gpt-5.2",
 }
 
+XHIGH_MODELS_LOWER = {model.lower() for model in XHIGH_MODELS}
+XHIGH_MODEL_IDS_LOWER = {model.split("/")[-1].lower() for model in XHIGH_MODELS}
+
+# Adaptive thinking is currently provider-managed for Anthropic Claude 4.6 models.
+ADAPTIVE_PROVIDER = "anthropic"
+ADAPTIVE_MODEL_PREFIXES = (
+    "claude-opus-4-6",
+    "claude-opus-4.6",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4.6",
+)
+
 
 def slugify_model(model_id: str) -> str:
     return model_id.replace("/", "-").replace(".", "-")
@@ -56,13 +68,42 @@ def normalize_model_id(model_id: str) -> str:
 def supports_xhigh_thinking(model_id: str) -> bool:
     """Check if a model supports xhigh thinking level."""
     normalized = normalize_model_id(model_id).lower()
-    model_lower = model_id.lower()
-    # Check full provider/model form
-    if normalized in {m.lower() for m in XHIGH_MODELS}:
+    if normalized in XHIGH_MODELS_LOWER:
         return True
-    # Check just model ID (without provider)
-    model_only = model_lower.split("/")[-1] if "/" in model_lower else model_lower
-    return model_only in {m.split("/")[-1].lower() for m in XHIGH_MODELS}
+
+    # Handle openrouter/provider/model format.
+    parts = normalized.split("/")
+    if len(parts) == 3 and parts[0] == "openrouter":
+        provider_model = f"{parts[1]}/{parts[2]}"
+        if provider_model in XHIGH_MODELS_LOWER:
+            return True
+
+    # Only allow bare model-id fallback when the caller did not provide a provider.
+    if "/" not in model_id:
+        return model_id.lower() in XHIGH_MODEL_IDS_LOWER
+
+    return False
+
+
+def supports_adaptive_thinking(model_id: str) -> bool:
+    """Check if a model natively supports adaptive thinking."""
+    normalized = normalize_model_id(model_id).lower()
+    parts = normalized.split("/")
+
+    # openrouter/provider/model -> provider/model
+    if len(parts) == 3 and parts[0] == "openrouter":
+        provider = parts[1]
+        model = parts[2]
+    elif len(parts) >= 2:
+        provider = parts[-2]
+        model = parts[-1]
+    else:
+        return False
+
+    if provider != ADAPTIVE_PROVIDER:
+        return False
+
+    return any(model.startswith(prefix) for prefix in ADAPTIVE_MODEL_PREFIXES)
 
 
 def validate_thinking_level(level: str, model_id: Optional[str] = None) -> Optional[str]:
@@ -87,9 +128,15 @@ def validate_thinking_level(level: str, model_id: Optional[str] = None) -> Optio
     if level_lower == "xhigh" and model_id and not supports_xhigh_thinking(model_id):
         logger.warning(
             "Thinking level 'xhigh' not supported by model '%s'. "
-            "xhigh is only available for: %s",
+            "xhigh is only available for GPT-5.x model families.",
             model_id,
-            ", ".join(sorted(set(m.split("/")[1] for m in XHIGH_MODELS))),
+        )
+        return None
+    if level_lower == "adaptive" and model_id and not supports_adaptive_thinking(model_id):
+        logger.warning(
+            "Thinking level 'adaptive' is not natively supported by model '%s'. "
+            "adaptive is currently intended for Anthropic Claude 4.6 models.",
+            model_id,
         )
         return None
     return level_lower
