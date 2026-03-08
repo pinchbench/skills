@@ -26,10 +26,12 @@ from typing import Dict, List, Optional, Any
 from lib_agent import (
     cleanup_agent_sessions,
     ensure_agent_exists,
+    ensure_model_available,
     execute_openclaw_task,
+    normalize_model_id,
     slugify_model,
 )
-from lib_grading import GradeResult, grade_task
+from lib_grading import DEFAULT_JUDGE_MODEL, grade_task
 from lib_tasks import Task, TaskLoader
 
 
@@ -212,6 +214,39 @@ def _parse_args() -> argparse.Namespace:
         default=1,
         help="Number of runs per task for averaging",
     )
+    parser.add_argument(
+        "--judge-model",
+        default=DEFAULT_JUDGE_MODEL,
+        help=(
+            "Judge model identifier (provider/model, e.g. anthropic/claude-opus-4.5). "
+            "Must be available in the local OpenClaw model catalog."
+        ),
+    )
+    parser.add_argument(
+        "--thinking",
+        default=None,
+        help=(
+            "Thinking level for benchmark model turns. "
+            "Allowed: off|minimal|low|medium|high|xhigh|adaptive"
+        ),
+    )
+    parser.add_argument(
+        "--judge-only",
+        type=str,
+        metavar="EXECUTION_JSON",
+        help=(
+            "Skip benchmark execution and re-run grading from an existing results/checkpoint JSON. "
+            "Useful for rejudging with a different --judge-model."
+        ),
+    )
+    parser.add_argument(
+        "--clear-sessions",
+        action="store_true",
+        help=(
+            "Clear stored agent/judge session transcripts before each turn. "
+            "Default is to preserve sessions for audit/resume workflows."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -265,6 +300,79 @@ def _get_git_version(script_dir: Path) -> str:
     return result.stdout.strip()
 
 
+def _build_task_payload(
+    *,
+    result: Dict[str, Any],
+    grading: Optional[Dict[str, Any]],
+    frontmatter: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = {
+        "agent_id": result.get("agent_id"),
+        "task_id": result.get("task_id"),
+        "status": result.get("status"),
+        "requested_model": result.get("requested_model"),
+        "runtime_model": result.get("runtime_model"),
+        "timed_out": result.get("timed_out", False),
+        "execution_time": result.get("execution_time", 0.0),
+        "exit_code": result.get("exit_code"),
+        "stdout": result.get("stdout", ""),
+        "stderr": result.get("stderr", ""),
+        "transcript_length": len(result.get("transcript", [])),
+        "transcript": result.get("transcript", []),
+        "usage": result.get("usage", {}),
+        "workspace": result.get("workspace", ""),
+        "grading": grading,
+        "frontmatter": frontmatter or result.get("frontmatter", {}),
+    }
+    return payload
+
+
+def _write_aggregate(
+    *,
+    output_path: Path,
+    benchmark_model: Optional[str],
+    judge_model: str,
+    thinking_level: Optional[str],
+    benchmark_version: str,
+    run_id: str,
+    suite: str,
+    runs_per_task: int,
+    results: List[Dict[str, Any]],
+    grades_by_task_id: Dict[str, Any],
+    tasks_by_id: Dict[str, Task],
+    mode: str = "benchmark",
+    source_results: Optional[str] = None,
+) -> None:
+    tasks_payload = []
+    for result in results:
+        task_id = result.get("task_id")
+        task_obj = tasks_by_id.get(task_id) if task_id else None
+        grading = grades_by_task_id.get(task_id)
+        tasks_payload.append(
+            _build_task_payload(
+                result=result,
+                grading=grading,
+                frontmatter=task_obj.frontmatter if task_obj else result.get("frontmatter", {}),
+            )
+        )
+
+    aggregate = {
+        "mode": mode,
+        "source_results": source_results,
+        "model": benchmark_model,
+        "judge_model": judge_model,
+        "thinking": thinking_level,
+        "benchmark_version": benchmark_version,
+        "run_id": run_id,
+        "timestamp": time.time(),
+        "suite": suite,
+        "runs_per_task": runs_per_task,
+        "tasks": tasks_payload,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(aggregate, indent=2), encoding="utf-8")
+
+
 def _colorize_gradient(ascii_art: str) -> str:
     if not _supports_truecolor():
         return ascii_art
@@ -302,8 +410,8 @@ def main():
         sys.exit(1)
 
     args = _parse_args()
-    if not args.model and not args.register and not args.upload:
-        logger.error("Missing required argument: --model (unless using --register or --upload)")
+    if not args.model and not args.register and not args.upload and not args.judge_only:
+        logger.error("Missing required argument: --model (unless using --register, --upload, or --judge-only)")
         sys.exit(2)
 
     if args.register:
@@ -345,7 +453,207 @@ def main():
     logger.info("📂 Loading tasks from directory...")
     runner.load_tasks()
 
-    model_slug = slugify_model(args.model)
+    skill_dir = skill_root
+
+    if args.judge_only:
+        source_path = Path(args.judge_only)
+        if not source_path.exists():
+            logger.error("--judge-only file not found: %s", source_path)
+            sys.exit(2)
+        try:
+            source_payload = json.loads(source_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            logger.error("Failed to parse --judge-only JSON: %s", exc)
+            sys.exit(2)
+
+        source_tasks_raw = source_payload.get("tasks", []) if isinstance(source_payload, dict) else []
+        if not isinstance(source_tasks_raw, list) or not source_tasks_raw:
+            logger.error("--judge-only JSON has no tasks to grade")
+            sys.exit(2)
+
+        try:
+            judge_model = ensure_model_available(normalize_model_id(args.judge_model), role="Judge")
+        except (ValueError, RuntimeError) as exc:
+            logger.error(str(exc))
+            sys.exit(2)
+
+        source_tasks: List[Dict[str, Any]] = []
+        source_by_id: Dict[str, Dict[str, Any]] = {}
+        for task_entry in source_tasks_raw:
+            if not isinstance(task_entry, dict):
+                continue
+            task_id = task_entry.get("task_id")
+            if not isinstance(task_id, str) or not task_id:
+                continue
+            source_tasks.append(task_entry)
+            if task_id not in source_by_id:
+                source_by_id[task_id] = task_entry
+
+        requested_task_ids = _select_task_ids(runner.tasks, args.suite)
+        if requested_task_ids is None:
+            target_task_ids = [task.get("task_id") for task in source_tasks if task.get("task_id")]
+        else:
+            missing_task_ids = [task_id for task_id in requested_task_ids if task_id not in source_by_id]
+            if missing_task_ids:
+                logger.error(
+                    "--judge-only input is missing requested task IDs: %s",
+                    ", ".join(missing_task_ids),
+                )
+                sys.exit(2)
+            target_task_ids = requested_task_ids
+
+        if not target_task_ids:
+            logger.error("No tasks selected for --judge-only run")
+            sys.exit(2)
+
+        tasks_by_id = {task.task_id: task for task in runner.tasks}
+        run_root = Path("/tmp/pinchbench")
+        run_id = _next_run_id(run_root)
+
+        benchmark_model = source_payload.get("model") if isinstance(source_payload, dict) else None
+        if benchmark_model is not None and not isinstance(benchmark_model, str):
+            benchmark_model = None
+        thinking_level = source_payload.get("thinking") if isinstance(source_payload, dict) else None
+        if thinking_level is not None and not isinstance(thinking_level, str):
+            thinking_level = None
+
+        results: List[Dict[str, Any]] = []
+        grades_by_task_id: Dict[str, Any] = {}
+
+        for i, task_id in enumerate(target_task_ids, 1):
+            task = tasks_by_id.get(task_id)
+            if task is None:
+                logger.error("Task id %s not found in local task set", task_id)
+                sys.exit(2)
+
+            source_task = source_by_id[task_id]
+            if source_task.get("status") != "success":
+                logger.error(
+                    "Cannot judge task %s because execution status is %s (must be success)",
+                    task_id,
+                    source_task.get("status"),
+                )
+                sys.exit(1)
+
+            transcript = source_task.get("transcript")
+            if not isinstance(transcript, list):
+                logger.error(
+                    "Task %s in --judge-only input has no transcript array. "
+                    "Use a results/checkpoint file produced by this updated benchmark.",
+                    task_id,
+                )
+                sys.exit(2)
+
+            execution_result = {
+                "agent_id": source_task.get("agent_id", ""),
+                "task_id": task_id,
+                "status": source_task.get("status", "success"),
+                "requested_model": source_task.get("requested_model"),
+                "runtime_model": source_task.get("runtime_model"),
+                "transcript": transcript,
+                "usage": source_task.get("usage", {}),
+                "workspace": source_task.get("workspace", ""),
+                "exit_code": source_task.get("exit_code", 0),
+                "timed_out": bool(source_task.get("timed_out", False)),
+                "execution_time": float(source_task.get("execution_time", 0.0)),
+                "stdout": source_task.get("stdout", ""),
+                "stderr": source_task.get("stderr", ""),
+                "frontmatter": source_task.get("frontmatter", {}),
+            }
+
+            logger.info("\n%s", "=" * 80)
+            logger.info("📋 Judge-only task %s/%s: %s", i, len(target_task_ids), task_id)
+            logger.info("%s", "=" * 80)
+
+            try:
+                grade = grade_task(
+                    task=task,
+                    execution_result=execution_result,
+                    skill_dir=skill_dir,
+                    judge_model=judge_model,
+                    clear_judge_sessions=args.clear_sessions,
+                )
+            except Exception as exc:
+                logger.error("Judge-only grading failed for %s: %s", task_id, exc)
+                sys.exit(1)
+
+            results.append(execution_result)
+            grades_by_task_id[task_id] = {
+                "runs": [grade.to_dict()],
+                "mean": grade.score,
+                "std": 0.0,
+                "min": grade.score,
+                "max": grade.score,
+            }
+
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        model_slug = slugify_model(benchmark_model or "judge-only")
+        output_path = output_dir / f"{run_id}_{model_slug}_judge-only.json"
+
+        _write_aggregate(
+            output_path=output_path,
+            benchmark_model=benchmark_model,
+            judge_model=judge_model,
+            thinking_level=thinking_level,
+            benchmark_version=_get_git_version(skill_root),
+            run_id=run_id,
+            suite=args.suite,
+            runs_per_task=1,
+            results=results,
+            grades_by_task_id=grades_by_task_id,
+            tasks_by_id=tasks_by_id,
+            mode="judge-only",
+            source_results=str(source_path.resolve()),
+        )
+
+        logger.info("Saved judge-only results to %s", output_path)
+        if args.no_upload:
+            logger.info("Skipping upload (--no-upload)")
+        else:
+            try:
+                from lib_upload import UploadError, upload_results
+
+                uploaded = upload_results(output_path)
+                if uploaded.rank is not None:
+                    logger.info("Uploaded to leaderboard: rank #%s", uploaded.rank)
+                if uploaded.leaderboard_url:
+                    logger.info("View at: %s", uploaded.leaderboard_url)
+            except UploadError as exc:
+                logger.warning("Upload failed: %s", exc)
+        return
+
+    try:
+        benchmark_model = ensure_model_available(args.model, role="Benchmark")
+        judge_model = normalize_model_id(args.judge_model)
+    except (ValueError, RuntimeError) as exc:
+        logger.error(str(exc))
+        sys.exit(2)
+
+    allowed_thinking_levels = {"off", "minimal", "low", "medium", "high", "xhigh", "adaptive"}
+    thinking_level: Optional[str] = None
+    if args.thinking:
+        parsed_levels = [level.strip().lower() for level in args.thinking.split(",") if level.strip()]
+        invalid_levels = [level for level in parsed_levels if level not in allowed_thinking_levels]
+        if invalid_levels:
+            logger.error(
+                "Invalid --thinking value(s): %s. Allowed values: %s",
+                ", ".join(invalid_levels),
+                ", ".join(sorted(allowed_thinking_levels)),
+            )
+            sys.exit(2)
+        if not parsed_levels:
+            logger.error("--thinking was provided but no valid thinking levels were parsed")
+            sys.exit(2)
+        if len(parsed_levels) > 1:
+            logger.error(
+                "Multiple thinking levels in one run are not supported in this branch. "
+                "Run separate benchmarks per level (e.g., --thinking off, then --thinking low)."
+            )
+            sys.exit(2)
+        thinking_level = parsed_levels[0]
+
+    model_slug = slugify_model(benchmark_model)
     run_root = Path("/tmp/pinchbench")
     run_id = _next_run_id(run_root)
     skill_dir = skill_root
@@ -353,8 +661,9 @@ def main():
     # Use a shared workspace for the agent - we'll copy fixtures per task
     agent_workspace = Path(f"/tmp/pinchbench/{run_id}/agent_workspace")
 
-    ensure_agent_exists(agent_id, args.model, agent_workspace)
-    cleanup_agent_sessions(agent_id)
+    ensure_agent_exists(agent_id, benchmark_model, agent_workspace)
+    if args.clear_sessions:
+        cleanup_agent_sessions(agent_id)
 
     task_ids = _select_task_ids(runner.tasks, args.suite)
     results = []
@@ -365,7 +674,34 @@ def main():
         tasks_to_run = [task for task in runner.tasks if task.task_id in task_ids]
     tasks_by_id = {task.task_id: task for task in tasks_to_run}
 
+    if any(task.grading_type in ("llm_judge", "hybrid") for task in tasks_to_run):
+        try:
+            judge_model = ensure_model_available(judge_model, role="Judge")
+        except (ValueError, RuntimeError) as exc:
+            logger.error(str(exc))
+            sys.exit(2)
+
     runs_per_task = max(1, args.runs)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = output_dir / f"{run_id}_{model_slug}.checkpoint.json"
+
+    def _flush_checkpoint() -> None:
+        _write_aggregate(
+            output_path=checkpoint_path,
+            benchmark_model=benchmark_model,
+            judge_model=judge_model,
+            thinking_level=thinking_level,
+            benchmark_version=_get_git_version(skill_root),
+            run_id=run_id,
+            suite=args.suite,
+            runs_per_task=runs_per_task,
+            results=results,
+            grades_by_task_id=grades_by_task_id,
+            tasks_by_id=tasks_by_id,
+            mode="checkpoint",
+        )
+
     for i, task in enumerate(tasks_to_run, 1):
         task_grades = []
         for run_index in range(runs_per_task):
@@ -378,52 +714,48 @@ def main():
                 runs_per_task,
             )
             logger.info("%s", "=" * 80)
-            execution_error = None
             try:
                 result = execute_openclaw_task(
                     task=task,
                     agent_id=agent_id,
-                    model_id=args.model,
+                    model_id=benchmark_model,
                     run_id=f"{run_id}-{run_index + 1}",
                     timeout_multiplier=args.timeout_multiplier,
                     skill_dir=skill_dir,
+                    thinking_level=thinking_level,
+                    clear_sessions=args.clear_sessions,
                 )
             except Exception as exc:
-                execution_error = str(exc)
-                logger.warning(
-                    "Task execution failed for %s, continuing: %s", task.task_id, exc
-                )
-                result = {
-                    "agent_id": agent_id,
-                    "task_id": task.task_id,
-                    "status": "error",
-                    "transcript": [],
-                    "usage": {},
-                    "workspace": "",
-                    "exit_code": -1,
-                    "timed_out": False,
-                    "execution_time": 0.0,
-                    "stdout": "",
-                    "stderr": execution_error,
-                }
-            try:
-                grade = grade_task(task=task, execution_result=result, skill_dir=skill_dir)
-            except Exception as exc:
-                if execution_error:
-                    note = f"Execution failed: {execution_error}; Grading failed: {exc}"
-                else:
-                    note = f"Grading failed: {exc}"
-                logger.warning("Task grading failed for %s, continuing: %s", task.task_id, exc)
-                grade = GradeResult(
-                    task_id=task.task_id,
-                    score=0.0,
-                    max_score=1.0,
-                    grading_type=task.grading_type,
-                    breakdown={},
-                    notes=note,
-                )
-            task_grades.append(grade)
+                logger.error("Task execution failed for %s: %s", task.task_id, exc)
+                sys.exit(1)
+
             results.append(result)
+            _flush_checkpoint()
+
+            if result.get("status") != "success":
+                logger.error(
+                    "Task %s failed determinism checks or execution. requested_model=%s runtime_model=%s stderr=%s",
+                    task.task_id,
+                    result.get("requested_model"),
+                    result.get("runtime_model"),
+                    result.get("stderr"),
+                )
+                sys.exit(1)
+
+            try:
+                grade = grade_task(
+                    task=task,
+                    execution_result=result,
+                    skill_dir=skill_dir,
+                    judge_model=judge_model,
+                    clear_judge_sessions=args.clear_sessions,
+                )
+            except Exception as exc:
+                logger.error("Task grading failed for %s: %s", task.task_id, exc)
+                _flush_checkpoint()
+                sys.exit(1)
+
+            task_grades.append(grade)
 
         task_scores = [grade.score for grade in task_grades]
         grades_by_task_id[task.task_id] = {
@@ -433,47 +765,37 @@ def main():
             "min": min(task_scores),
             "max": max(task_scores),
         }
-
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    aggregate = {
-        "model": args.model,
-        "benchmark_version": _get_git_version(skill_root),
-        "run_id": run_id,
-        "timestamp": time.time(),
-        "suite": args.suite,
-        "runs_per_task": runs_per_task,
-        "tasks": [
-            {
-                "task_id": result["task_id"],
-                "status": result["status"],
-                "timed_out": result["timed_out"],
-                "execution_time": result["execution_time"],
-                "transcript_length": len(result["transcript"]),
-                "usage": result.get("usage", {}),
-                "workspace": result["workspace"],
-                "grading": grades_by_task_id[result["task_id"]],
-                "frontmatter": tasks_by_id[result["task_id"]].frontmatter,
-            }
-            for result in results
-        ],
-    }
+        _flush_checkpoint()
 
     output_path = output_dir / f"{run_id}_{model_slug}.json"
-    output_path.write_text(json.dumps(aggregate, indent=2), encoding="utf-8")
+    _write_aggregate(
+        output_path=output_path,
+        benchmark_model=benchmark_model,
+        judge_model=judge_model,
+        thinking_level=thinking_level,
+        benchmark_version=_get_git_version(skill_root),
+        run_id=run_id,
+        suite=args.suite,
+        runs_per_task=runs_per_task,
+        results=results,
+        grades_by_task_id=grades_by_task_id,
+        tasks_by_id=tasks_by_id,
+        mode="benchmark",
+    )
 
     logger.info("Saved results to %s", output_path)
+    logger.info("Checkpoint file: %s", checkpoint_path)
     if args.no_upload:
         logger.info("Skipping upload (--no-upload)")
     else:
         try:
             from lib_upload import UploadError, upload_results
 
-            result = upload_results(output_path)
-            if result.rank is not None:
-                logger.info("Uploaded to leaderboard: rank #%s", result.rank)
-            if result.leaderboard_url:
-                logger.info("View at: %s", result.leaderboard_url)
+            uploaded = upload_results(output_path)
+            if uploaded.rank is not None:
+                logger.info("Uploaded to leaderboard: rank #%s", uploaded.rank)
+            if uploaded.leaderboard_url:
+                logger.info("View at: %s", uploaded.leaderboard_url)
         except UploadError as exc:
             logger.warning("Upload failed: %s", exc)
 

@@ -51,6 +51,7 @@ def grade_task(
     judge_model: str = DEFAULT_JUDGE_MODEL,
     judge_agent_prefix: str = DEFAULT_JUDGE_AGENT_PREFIX,
     judge_timeout_seconds: float = DEFAULT_JUDGE_TIMEOUT_SECONDS,
+    clear_judge_sessions: bool = False,
 ) -> GradeResult:
     grading_type = task.grading_type
     if grading_type == "automated":
@@ -63,6 +64,7 @@ def grade_task(
             judge_agent_prefix=judge_agent_prefix,
             judge_timeout_seconds=judge_timeout_seconds,
             skill_dir=skill_dir,
+            clear_judge_sessions=clear_judge_sessions,
         )
     if grading_type == "hybrid":
         auto_result = _grade_automated(task, execution_result)
@@ -73,6 +75,7 @@ def grade_task(
             judge_agent_prefix=judge_agent_prefix,
             judge_timeout_seconds=judge_timeout_seconds,
             skill_dir=skill_dir,
+            clear_judge_sessions=clear_judge_sessions,
         )
         return _combine_grades(task, auto_result, llm_result)
     raise ValueError(f"Unknown grading type: {grading_type}")
@@ -129,6 +132,7 @@ def _grade_llm_judge(
     judge_agent_prefix: str,
     judge_timeout_seconds: float,
     skill_dir: Path,
+    clear_judge_sessions: bool = False,
 ) -> GradeResult:
     transcript_summary = _summarize_transcript(execution_result.get("transcript", []))
     rubric = task.llm_judge_rubric or _format_grading_criteria(task)
@@ -141,7 +145,16 @@ def _grade_llm_judge(
         prompt=prompt,
         workspace=judge_workspace,
         timeout_seconds=judge_timeout_seconds,
+        expected_model_ref=judge_model,
+        clear_sessions=clear_judge_sessions,
     )
+    if judge_result.get("status") != "success":
+        raise RuntimeError(
+            "Judge run failed determinism checks or execution: "
+            f"requested_model={judge_result.get('requested_model')} "
+            f"runtime_model={judge_result.get('runtime_model')} "
+            f"stderr={judge_result.get('stderr')}"
+        )
 
     parsed = _parse_judge_response(judge_result.get("transcript", []))
     breakdown = parsed.get("scores", {})

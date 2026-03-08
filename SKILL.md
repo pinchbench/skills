@@ -68,14 +68,36 @@ uv run benchmark.py --model anthropic/claude-sonnet-4 --no-upload
 
 | Option | Description |
 |--------|-------------|
-| `--model` | Model identifier (e.g., `anthropic/claude-sonnet-4`) |
+| `--model` | **Required provider-qualified model** (e.g., `anthropic/claude-sonnet-4`, `openai-codex/gpt-5.3-codex`) |
+| `--judge-model` | Provider-qualified judge model (default: `anthropic/claude-opus-4.5`) |
 | `--suite` | `all`, `automated-only`, or comma-separated task IDs |
-| `--output-dir` | Results directory (default: `results/`) |
+| `--thinking` | Thinking level (`off|minimal|low|medium|high|xhigh|adaptive`) for benchmark turns |
+| `--output-dir` | Results/checkpoint directory (default: `results/`) |
 | `--timeout-multiplier` | Scale task timeouts for slower models |
 | `--runs` | Number of runs per task for averaging |
+| `--judge-only FILE` | Re-run grading only from existing results/checkpoint JSON (no task execution) |
+| `--clear-sessions` | Clear agent/judge transcript sessions before each turn (default is persistent) |
 | `--no-upload` | Skip uploading to leaderboard |
 | `--register` | Request new API token for submissions |
 | `--upload FILE` | Upload previous results JSON |
+
+## Determinism Guarantees
+
+PinchBench enforces strict model routing for benchmark validity:
+
+- No silent provider/model fallbacks
+- Requested benchmark model must match runtime model on every task
+- Requested judge model must match runtime judge model
+- Model mismatches fail the run immediately
+- If execution fails, PinchBench does not continue to judge that task
+
+## Persistence & Re-Judging
+
+- Session transcripts are preserved by default (no auto cleanup between tasks)
+- Benchmarks write rolling checkpoint files during execution: `results/<run>_<model>.checkpoint.json`
+- Final results include per-task transcripts to support replay/regrading workflows
+- You can rerun grading with another judge model using `--judge-only <json> --judge-model <provider/model>`
+- Use `--clear-sessions` when you explicitly want old transcript state removed before each turn
 
 ## Token Registration
 
