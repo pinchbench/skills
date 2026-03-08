@@ -1,0 +1,64 @@
+# Default models for scheduled benchmark runs
+# All models routed through OpenRouter for consistent API access
+#
+# This list includes all models currently on the PinchBench leaderboard
+# plus new models to benchmark.
+
+models:
+  # Anthropic
+  - openrouter/anthropic/claude-sonnet-4
+  - openrouter/anthropic/claude-sonnet-4.5
+  - openrouter/anthropic/claude-opus-4.5
+  - openrouter/anthropic/claude-opus-4.6
+  - openrouter/anthropic/claude-haiku-4.5
+
+  # OpenAI
+  - openrouter/openai/gpt-4o
+  - openrouter/openai/gpt-4o-mini
+  - openrouter/openai/gpt-5-nano
+  - openrouter/openai/gpt-5.2
+  - openrouter/openai/gpt-5.4
+  - openrouter/openai-codex/gpt-5.3-codex
+
+  # Google
+  - openrouter/google/gemini-2.5-flash
+  - openrouter/google/gemini-2.5-flash-lite
+  - openrouter/google/gemini-3-flash-preview
+  - openrouter/google/gemini-3-pro-preview
+  - openrouter/google/gemini-2.0-flash
+  - openrouter/google/gemini-1.5-pro
+
+  # DeepSeek
+  - openrouter/deepseek/deepseek-chat
+  #- openrouter/deepseek/deepseek-v3.2
+
+  # Minimax
+  - openrouter/minimax/minimax-m2.1
+  - openrouter/minimax/minimax-m2.5
+
+  # Qwen
+  - openrouter/qwen/qwen3-coder-next
+  - openrouter/qwen/qwen3-max-thinking
+
+  # Mistral
+  - openrouter/mistralai/devstral-2512
+  - openrouter/mistral/mistral-large
+
+  # X.AI
+  - openrouter/x-ai/grok-4.1-fast
+
+  # Z.AI (GLM)
+  - openrouter/z-ai/glm-4.5-air
+  - openrouter/z-ai/glm-5
+
+  # Moonshot
+  - openrouter/moonshotai/kimi-k2.5
+
+  # Meta
+  - openrouter/meta-llama/llama-3.1-70b
+
+  # Others
+  - openrouter/stepfun/step-3.5-flash
+  - openrouter/sourceful/riverflow-v2-pro
+  - openrouter/openrouter/aurora-alpha
+  #- openrouter/arcee-ai/trinity-large-preview:free

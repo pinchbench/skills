@@ -52,12 +52,20 @@ def grade_task(
     judge_agent_prefix: str = DEFAULT_JUDGE_AGENT_PREFIX,
     judge_timeout_seconds: float = DEFAULT_JUDGE_TIMEOUT_SECONDS,
     clear_judge_sessions: bool = False,
+    verbose: bool = False,
 ) -> GradeResult:
     grading_type = task.grading_type
+    if verbose:
+        logger.info("   [VERBOSE] Grading task %s with type: %s", task.task_id, grading_type)
+        logger.info("   [VERBOSE] Execution status: %s", execution_result.get("status", "unknown"))
+    
     if grading_type == "automated":
-        return _grade_automated(task, execution_result)
+        result = _grade_automated(task, execution_result, verbose=verbose)
+        if verbose:
+            logger.info("   [VERBOSE] Automated grade breakdown: %s", result.breakdown)
+        return result
     if grading_type == "llm_judge":
-        return _grade_llm_judge(
+        result = _grade_llm_judge(
             task=task,
             execution_result=execution_result,
             judge_model=judge_model,
@@ -65,9 +73,13 @@ def grade_task(
             judge_timeout_seconds=judge_timeout_seconds,
             skill_dir=skill_dir,
             clear_judge_sessions=clear_judge_sessions,
+            verbose=verbose,
         )
+        if verbose:
+            logger.info("   [VERBOSE] LLM judge breakdown: %s", result.breakdown)
+        return result
     if grading_type == "hybrid":
-        auto_result = _grade_automated(task, execution_result)
+        auto_result = _grade_automated(task, execution_result, verbose=verbose)
         llm_result = _grade_llm_judge(
             task=task,
             execution_result=execution_result,
@@ -76,12 +88,13 @@ def grade_task(
             judge_timeout_seconds=judge_timeout_seconds,
             skill_dir=skill_dir,
             clear_judge_sessions=clear_judge_sessions,
+            verbose=verbose,
         )
         return _combine_grades(task, auto_result, llm_result)
     raise ValueError(f"Unknown grading type: {grading_type}")
 
 
-def _grade_automated(task: Task, execution_result: Dict[str, Any]) -> GradeResult:
+def _grade_automated(task: Task, execution_result: Dict[str, Any], verbose: bool = False) -> GradeResult:
     grading_code = _extract_grading_code(task)
     if not grading_code:
         return GradeResult(
@@ -112,6 +125,9 @@ def _grade_automated(task: Task, execution_result: Dict[str, Any]) -> GradeResul
     )
     if not isinstance(scores, dict):
         scores = {}
+    
+    if verbose:
+        logger.info("   [VERBOSE] Automated grading scores: %s", scores)
 
     total = _average_scores(scores)
     return GradeResult(
@@ -133,8 +149,11 @@ def _grade_llm_judge(
     judge_timeout_seconds: float,
     skill_dir: Path,
     clear_judge_sessions: bool = False,
+    verbose: bool = False,
 ) -> GradeResult:
     transcript_summary = _summarize_transcript(execution_result.get("transcript", []))
+    if verbose:
+        logger.info("   [VERBOSE] Transcript summary for judge (first 1000 chars):\n%s", transcript_summary[:1000])
     rubric = task.llm_judge_rubric or _format_grading_criteria(task)
     prompt = _build_judge_prompt(task, transcript_summary, rubric)
 
@@ -156,12 +175,18 @@ def _grade_llm_judge(
             f"stderr={judge_result.get('stderr')}"
         )
 
-    parsed = _parse_judge_response(judge_result.get("transcript", []))
+    raw_parsed = _parse_judge_response(judge_result.get("transcript", []))
+    if verbose:
+        logger.info("   [VERBOSE] Judge raw response parsed: %s", raw_parsed)
+    
+    # Normalize the response to handle various formats (criteria_scores, score, justification, etc.)
+    parsed = _normalize_judge_response(raw_parsed)
+    if verbose:
+        logger.info("   [VERBOSE] Normalized judge response: %s", parsed)
+    
     breakdown = parsed.get("scores", {})
     total = parsed.get("total")
     notes = parsed.get("notes", "")
-    if total is None:
-        total = _average_scores(breakdown)
     return GradeResult(
         task_id=task.task_id,
         score=float(total) if total is not None else 0.0,
@@ -257,7 +282,12 @@ def _summarize_transcript(transcript: List[Dict[str, Any]]) -> str:
 
 def _build_judge_prompt(task: Task, transcript_summary: str, rubric: str) -> str:
     return (
-        "You are grading an AI agent's performance on a task.\n\n"
+        "You are a grading function. Your ONLY job is to output a single JSON object.\n\n"
+        "CRITICAL RULES:\n"
+        "- Do NOT use any tools (no Read, Write, exec, or any other tool calls)\n"
+        "- Do NOT create files or run commands\n"
+        "- Do NOT write any prose, explanation, or commentary outside the JSON\n"
+        "- Respond with ONLY a JSON object — nothing else\n\n"
         "Be a strict evaluator. Reserve 1.0 for genuinely excellent performance. "
         "An average acceptable completion should score around 0.6-0.7. "
         "Deduct points for unnecessary steps, verbose output, and inefficient tool usage.\n\n"
@@ -269,8 +299,9 @@ def _build_judge_prompt(task: Task, transcript_summary: str, rubric: str) -> str
         f"{transcript_summary}\n\n"
         "## Grading Rubric\n"
         f"{rubric}\n\n"
-        "Score each criterion from 0.0 to 1.0. Provide brief justification for each score. "
-        "Output strict JSON with keys: scores (object), total (number 0-1), notes (string)."
+        "Score each criterion from 0.0 to 1.0.\n\n"
+        "Respond with ONLY this JSON structure (no markdown, no code fences, no extra text):\n"
+        '{"scores": {"criterion_name": 0.0}, "total": 0.0, "notes": "brief justification"}'
     )
 
 
@@ -345,5 +376,76 @@ def _parse_judge_response(transcript: List[Dict[str, Any]]) -> Dict[str, Any]:
         except json.JSONDecodeError:
             continue
 
+    # Fallback: try to extract numeric scores from prose responses.
+    # Models sometimes return "Total: 0.72" or "Overall score: 0.65" instead of JSON.
+    score_pattern = re.search(
+        r"(?:total|overall|final)\s*(?:score)?[:\s]*(0\.\d+|1\.0+)",
+        raw_text,
+        re.IGNORECASE,
+    )
+    if score_pattern:
+        try:
+            total = float(score_pattern.group(1))
+            if 0.0 <= total <= 1.0:
+                logger.warning(
+                    "Fell back to regex score extraction from prose (total=%.2f)", total
+                )
+                return {"scores": {}, "total": total, "notes": "Score extracted from prose (JSON parse failed)"}
+        except ValueError:
+            pass
+
     logger.warning("Failed to parse judge JSON response")
     return {}
+
+
+def _normalize_judge_response(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize judge response to expected format with 'scores', 'total', and 'notes'.
+    
+    Handles various response formats:
+    - {"scores": {...}, "total": 0.9, "notes": "..."}  (expected)
+    - {"criteria_scores": {...}, ...}  (Claude sometimes uses this)
+    - {"score": 0.9, "justification": "..."}  (simplified format)
+    """
+    result: Dict[str, Any] = {"scores": {}, "total": None, "notes": ""}
+    
+    # Extract scores from various keys
+    if "scores" in parsed:
+        scores_data = parsed["scores"]
+        if isinstance(scores_data, dict):
+            # Handle nested structure: {"criterion": {"score": 0.9, "weight": 0.3}}
+            for key, value in scores_data.items():
+                if isinstance(value, dict) and "score" in value:
+                    result["scores"][key] = float(value["score"]) if isinstance(value["score"], (int, float, str)) else value["score"]
+                elif isinstance(value, (int, float)):
+                    result["scores"][key] = value
+    elif "criteria_scores" in parsed:
+        # Handle Claude's alternate format
+        criteria = parsed["criteria_scores"]
+        if isinstance(criteria, dict):
+            for key, value in criteria.items():
+                if isinstance(value, dict) and "score" in value:
+                    result["scores"][key] = value["score"]
+                elif isinstance(value, (int, float)):
+                    result["scores"][key] = value
+    
+    # Extract total score
+    if "total" in parsed and parsed["total"] is not None:
+        result["total"] = float(parsed["total"]) if isinstance(parsed["total"], (int, float)) else None
+    elif "score" in parsed and isinstance(parsed["score"], (int, float)):
+        result["total"] = float(parsed["score"])
+    elif result["scores"]:
+        # Calculate average if we have individual scores but no total
+        values = [v for v in result["scores"].values() if isinstance(v, (int, float))]
+        if values:
+            result["total"] = sum(values) / len(values)
+    
+    # Extract notes/justification
+    if "notes" in parsed:
+        result["notes"] = str(parsed["notes"])
+    elif "justification" in parsed:
+        result["notes"] = str(parsed["justification"])
+    elif "reasoning" in parsed:
+        result["notes"] = str(parsed["reasoning"])
+    
+    return result

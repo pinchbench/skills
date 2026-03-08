@@ -247,6 +247,12 @@ def _parse_args() -> argparse.Namespace:
             "Default is to preserve sessions for audit/resume workflows."
         ),
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose logging (shows transcript contents, workspace files, etc.)",
+    )
     return parser.parse_args()
 
 
@@ -572,6 +578,7 @@ def main():
                     skill_dir=skill_dir,
                     judge_model=judge_model,
                     clear_judge_sessions=args.clear_sessions,
+                    verbose=args.verbose,
                 )
             except Exception as exc:
                 logger.error("Judge-only grading failed for %s: %s", task_id, exc)
@@ -724,6 +731,7 @@ def main():
                     skill_dir=skill_dir,
                     thinking_level=thinking_level,
                     clear_sessions=args.clear_sessions,
+                    verbose=args.verbose,
                 )
             except Exception as exc:
                 logger.error("Task execution failed for %s: %s", task.task_id, exc)
@@ -749,6 +757,7 @@ def main():
                     skill_dir=skill_dir,
                     judge_model=judge_model,
                     clear_judge_sessions=args.clear_sessions,
+                    verbose=args.verbose,
                 )
             except Exception as exc:
                 logger.error("Task grading failed for %s: %s", task.task_id, exc)
@@ -756,6 +765,21 @@ def main():
                 sys.exit(1)
 
             task_grades.append(grade)
+
+            # Log score immediately after grading
+            score_pct = grade.score / grade.max_score * 100 if grade.max_score > 0 else 0
+            status_emoji = "✅" if grade.score >= grade.max_score else "⚠️" if grade.score > 0 else "❌"
+            logger.info(
+                "%s Task %s: %.1f/%.1f (%.0f%%) - %s",
+                status_emoji,
+                task.task_id,
+                grade.score,
+                grade.max_score,
+                score_pct,
+                grade.grading_type,
+            )
+            if grade.notes:
+                logger.info("   Notes: %s", grade.notes[:200])
 
         task_scores = [grade.score for grade in task_grades]
         grades_by_task_id[task.task_id] = {
