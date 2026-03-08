@@ -62,8 +62,6 @@ class OpenClawAgent:
         Returns:
             Dictionary containing execution results
         """
-        if simulate:
-            logger.info("Simulate flag no longer supported for execute_task")
         raise NotImplementedError("Use execute_openclaw_task helper for real runs")
 
 
@@ -493,6 +491,7 @@ def main():
     task_ids = _select_task_ids(runner.tasks, args.suite)
     results = []
     grades_by_task_id = {}
+    execution_by_task_id: Dict[str, Dict[str, Any]] = {}
 
     tasks_to_run = runner.tasks
     if task_ids is not None:
@@ -584,6 +583,17 @@ def main():
             "std": statistics.stdev(task_scores) if len(task_scores) > 1 else 0.0,
             "min": min(task_scores),
             "max": max(task_scores),
+        }
+        # Aggregate execution metadata across runs for this task
+        task_results = [r for r in results if r["task_id"] == task.task_id]
+        last_result = task_results[-1]
+        execution_by_task_id[task.task_id] = {
+            "status": last_result["status"],
+            "timed_out": any(r["timed_out"] for r in task_results),
+            "execution_time": sum(r["execution_time"] for r in task_results),
+            "transcript_length": len(last_result["transcript"]),
+            "usage": last_result.get("usage", {}),
+            "workspace": last_result["workspace"],
         }
 
     output_dir = Path(args.output_dir)

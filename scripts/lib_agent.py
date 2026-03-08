@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -16,6 +17,13 @@ from lib_tasks import Task
 
 logger = logging.getLogger(__name__)
 MAX_OPENCLAW_MESSAGE_CHARS = 4000
+
+
+def _decode_output(data: bytes | str | None) -> str:
+    """Decode subprocess output that may be bytes (e.g. from TimeoutExpired)."""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return data or ""
 
 
 def slugify_model(model_id: str) -> str:
@@ -279,11 +287,18 @@ def _find_recent_session_path(agent_dir: Path, started_at: float) -> Path | None
     if not candidates:
         return None
     tolerance_seconds = 5.0
-    recent_candidates = [
-        path for path in candidates if path.stat().st_mtime >= (started_at - tolerance_seconds)
-    ]
-    pool = recent_candidates or candidates
-    return max(pool, key=lambda path: path.stat().st_mtime)
+    # Cache stat results to avoid TOCTOU race and redundant syscalls
+    candidates_with_mtime = []
+    for path in candidates:
+        try:
+            candidates_with_mtime.append((path, path.stat().st_mtime))
+        except OSError:
+            continue
+    if not candidates_with_mtime:
+        return None
+    recent = [(p, m) for p, m in candidates_with_mtime if m >= (started_at - tolerance_seconds)]
+    pool = recent or candidates_with_mtime
+    return max(pool, key=lambda x: x[1])[0]
 
 
 def _load_transcript(agent_id: str, session_id: str, started_at: float) -> List[Dict[str, Any]]:
@@ -449,8 +464,8 @@ def execute_openclaw_task(
         exit_code = result.returncode
     except subprocess.TimeoutExpired as exc:
         timed_out = True
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
+        stdout = _decode_output(exc.stdout)
+        stderr = _decode_output(exc.stderr)
     except FileNotFoundError as exc:
         stderr = f"openclaw command not found: {exc}"
 
@@ -458,15 +473,16 @@ def execute_openclaw_task(
     usage = _extract_usage_from_transcript(transcript)
     execution_time = time.time() - start_time
 
-    status = "success"
-    if timed_out:
-        status = "timeout"
-    if not transcript:
-        status = "error"
-    if exit_code not in (0, -1) and not timed_out:
-        status = "error"
     if stderr and "openclaw command not found" in str(stderr):
         status = "error"
+    elif timed_out:
+        status = "timeout"
+    elif exit_code not in (0, -1):
+        status = "error"
+    elif not transcript:
+        status = "error"
+    else:
+        status = "success"
 
     # Verbose logging for debugging
     if verbose:
@@ -485,6 +501,8 @@ def execute_openclaw_task(
                 msg = entry.get("message", {})
                 role = msg.get("role", "unknown")
                 content = msg.get("content", "")
+                if not isinstance(content, str):
+                    content = str(content) if content else ""
                 if role == "assistant":
                     # Truncate long responses
                     preview = content[:500] + "..." if len(content) > 500 else content
@@ -593,8 +611,8 @@ def run_openclaw_prompt(
                 break
         except subprocess.TimeoutExpired as exc:
             timed_out = True
-            stdout += exc.stdout or ""
-            stderr += exc.stderr or ""
+            stdout += _decode_output(exc.stdout)
+            stderr += _decode_output(exc.stderr)
             break
         except FileNotFoundError as exc:
             stderr += f"openclaw command not found: {exc}"
@@ -603,15 +621,16 @@ def run_openclaw_prompt(
     transcript = _load_transcript(agent_id, session_id, start_time)
     execution_time = time.time() - start_time
 
-    status = "success"
-    if timed_out:
-        status = "timeout"
-    if not transcript:
-        status = "error"
-    if exit_code not in (0, -1) and not timed_out:
-        status = "error"
     if stderr and "openclaw command not found" in str(stderr):
         status = "error"
+    elif timed_out:
+        status = "timeout"
+    elif exit_code not in (0, -1):
+        status = "error"
+    elif not transcript:
+        status = "error"
+    else:
+        status = "success"
 
     return {
         "agent_id": agent_id,
