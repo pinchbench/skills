@@ -8,8 +8,9 @@ import json
 import logging
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from lib_tasks import Task
 
@@ -23,12 +24,92 @@ def slugify_model(model_id: str) -> str:
 
 
 def normalize_model_id(model_id: str) -> str:
-    """Ensure model id is provider-qualified for OpenClaw."""
-    if "/" not in model_id:
-        return model_id
-    if model_id.startswith("openrouter/"):
-        return model_id
-    return f"openrouter/{model_id}"
+    """Normalize a model ref while preserving provider routing.
+
+    PinchBench is a deterministic benchmark tool: it must not silently rewrite
+    provider-qualified model refs (for example by forcing openrouter/...).
+    """
+    normalized = model_id.strip()
+    while normalized.startswith("/"):
+        normalized = normalized[1:]
+    if not normalized or "/" not in normalized:
+        raise ValueError(
+            "Model must be provider-qualified (provider/model), "
+            f"got: {model_id!r}"
+        )
+    return normalized
+
+
+_MODEL_CATALOG_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def _load_model_catalog() -> Dict[str, Dict[str, Any]]:
+    global _MODEL_CATALOG_CACHE
+    if _MODEL_CATALOG_CACHE is not None:
+        return _MODEL_CATALOG_CACHE
+
+    try:
+        result = subprocess.run(
+            ["openclaw", "models", "list", "--all", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"openclaw CLI not found while loading model catalog: {exc}") from exc
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to load model catalog via `openclaw models list --all --json`: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Failed to parse model catalog JSON: {exc}") from exc
+
+    models = payload.get("models", []) if isinstance(payload, dict) else []
+    catalog: Dict[str, Dict[str, Any]] = {}
+    for entry in models:
+        if not isinstance(entry, dict):
+            continue
+        key = entry.get("key")
+        if not isinstance(key, str):
+            continue
+        catalog[key.lower()] = entry
+
+    _MODEL_CATALOG_CACHE = catalog
+    return catalog
+
+
+def _suggest_model_ref(model_ref: str, catalog: Dict[str, Dict[str, Any]]) -> Optional[str]:
+    if model_ref.lower().startswith("openrouter/"):
+        return None
+    candidate = f"openrouter/{model_ref}".lower()
+    if candidate in catalog:
+        return f"openrouter/{model_ref}"
+    return None
+
+
+def ensure_model_available(model_id: str, *, role: str) -> str:
+    """Validate model ref format and availability in local OpenClaw config."""
+    normalized_model = normalize_model_id(model_id)
+    catalog = _load_model_catalog()
+    entry = catalog.get(normalized_model.lower())
+    if entry is None:
+        suggestion = _suggest_model_ref(normalized_model, catalog)
+        extra = f" Maybe you meant `{suggestion}`." if suggestion else ""
+        raise ValueError(
+            f"{role} model `{normalized_model}` is not in the OpenClaw model catalog.{extra}"
+        )
+    if not entry.get("available", False):
+        suggestion = _suggest_model_ref(normalized_model, catalog)
+        extra = f" Maybe you meant `{suggestion}`." if suggestion else ""
+        raise ValueError(
+            f"{role} model `{normalized_model}` exists but is not available/configured in this OpenClaw instance.{extra}"
+        )
+    return normalized_model
 
 
 def _get_agent_workspace(agent_id: str) -> Path | None:
@@ -277,6 +358,25 @@ def _find_recent_session_path(agent_dir: Path, started_at: float) -> Path | None
     return max(pool, key=lambda path: path.stat().st_mtime)
 
 
+def _entry_timestamp_epoch(entry: Dict[str, Any]) -> Optional[float]:
+    ts = entry.get("timestamp")
+    if isinstance(ts, (int, float)):
+        # OpenClaw sometimes stores ms in nested message.timestamp, but the
+        # top-level timestamp is typically ISO. Keep numeric support just in case.
+        return ts / 1000.0 if ts > 10_000_000_000 else float(ts)
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    msg = entry.get("message")
+    if isinstance(msg, dict):
+        mts = msg.get("timestamp")
+        if isinstance(mts, (int, float)):
+            return mts / 1000.0 if mts > 10_000_000_000 else float(mts)
+    return None
+
+
 def _load_transcript(agent_id: str, session_id: str, started_at: float) -> List[Dict[str, Any]]:
     agent_dir = _get_agent_store_dir(agent_id)
     transcript_path = None
@@ -352,6 +452,18 @@ def _load_transcript(agent_id: str, session_id: str, started_at: float) -> List[
         except json.JSONDecodeError as exc:
             logger.warning("Failed to parse transcript line: %s", exc)
             transcript.append({"raw": line, "parse_error": str(exc)})
+
+    # When sessions are persistent, multiple task turns can share one session
+    # file. Keep only entries for this invocation window when possible.
+    cutoff = started_at - 2.0
+    recent_entries = []
+    for entry in transcript:
+        entry_ts = _entry_timestamp_epoch(entry)
+        if entry_ts is not None and entry_ts >= cutoff:
+            recent_entries.append(entry)
+    if recent_entries:
+        return recent_entries
+
     return transcript
 
 
@@ -386,6 +498,67 @@ def _extract_usage_from_transcript(transcript: List[Dict[str, Any]]) -> Dict[str
     return totals
 
 
+def _extract_runtime_model_ref(transcript: List[Dict[str, Any]]) -> Optional[str]:
+    """Extract the last provider/model seen at runtime from transcript."""
+    latest_model_ref: Optional[str] = None
+
+    for entry in transcript:
+        if entry.get("type") != "custom":
+            continue
+        if entry.get("customType") != "model-snapshot":
+            continue
+        data = entry.get("data", {})
+        provider = data.get("provider")
+        model_id = data.get("modelId")
+        if isinstance(provider, str) and isinstance(model_id, str):
+            latest_model_ref = f"{provider}/{model_id}"
+
+    if latest_model_ref:
+        return latest_model_ref
+
+    for entry in transcript:
+        if entry.get("type") != "message":
+            continue
+        msg = entry.get("message", {})
+        if msg.get("role") != "assistant":
+            continue
+        provider = msg.get("provider")
+        model_id = msg.get("model")
+        if isinstance(provider, str) and isinstance(model_id, str):
+            latest_model_ref = f"{provider}/{model_id}"
+
+    return latest_model_ref
+
+
+def _extract_terminal_assistant_error(transcript: List[Dict[str, Any]]) -> Optional[str]:
+    """Return terminal assistant error if the *last* assistant message ended in error.
+
+    OpenClaw may recover from transient provider/auth errors mid-turn (profile
+    rotation). For deterministic benchmark status we only treat the run as an
+    assistant error when the last assistant event is itself an error.
+    """
+    last_assistant_msg: Optional[Dict[str, Any]] = None
+    for entry in transcript:
+        if entry.get("type") != "message":
+            continue
+        msg = entry.get("message", {})
+        if msg.get("role") != "assistant":
+            continue
+        if isinstance(msg, dict):
+            last_assistant_msg = msg
+
+    if not last_assistant_msg:
+        return None
+
+    error_message = last_assistant_msg.get("errorMessage")
+    stop_reason = last_assistant_msg.get("stopReason")
+    if isinstance(error_message, str) and error_message.strip():
+        return error_message.strip()
+    if stop_reason == "error":
+        return "assistant stopReason=error"
+    return None
+
+
 def execute_openclaw_task(
     *,
     task: Task,
@@ -394,6 +567,8 @@ def execute_openclaw_task(
     run_id: str,
     timeout_multiplier: float,
     skill_dir: Path,
+    thinking_level: Optional[str] = None,
+    clear_sessions: bool = False,
     verbose: bool = False,
 ) -> Dict[str, Any]:
     logger.info("🤖 Agent [%s] starting task: %s", agent_id, task.task_id)
@@ -402,9 +577,10 @@ def execute_openclaw_task(
     if verbose:
         logger.info("   Prompt: %s", task.prompt[:500] + "..." if len(task.prompt) > 500 else task.prompt)
 
-    # Clean up previous session transcripts so we can reliably find this task's
-    # transcript (OpenClaw uses its own UUID-based naming, not our session ID).
-    cleanup_agent_sessions(agent_id)
+    # Optional cleanup for deterministic fresh session directories.
+    # Default is to preserve sessions so runs are resumable / auditable.
+    if clear_sessions:
+        cleanup_agent_sessions(agent_id)
 
     start_time = time.time()
     workspace = prepare_task_workspace(skill_dir, run_id, task, agent_id)
@@ -416,17 +592,21 @@ def execute_openclaw_task(
     timed_out = False
 
     try:
+        command = [
+            "openclaw",
+            "agent",
+            "--agent",
+            agent_id,
+            "--session-id",
+            session_id,
+            "--message",
+            task.prompt,
+        ]
+        if thinking_level:
+            command.extend(["--thinking", thinking_level])
+
         result = subprocess.run(
-            [
-                "openclaw",
-                "agent",
-                "--agent",
-                agent_id,
-                "--session-id",
-                session_id,
-                "--message",
-                task.prompt,
-            ],
+            command,
             capture_output=True,
             text=True,
             cwd=str(workspace),
@@ -447,6 +627,10 @@ def execute_openclaw_task(
     usage = _extract_usage_from_transcript(transcript)
     execution_time = time.time() - start_time
 
+    requested_model = normalize_model_id(model_id)
+    runtime_model = _extract_runtime_model_ref(transcript)
+    assistant_error = _extract_terminal_assistant_error(transcript)
+
     status = "success"
     if timed_out:
         status = "timeout"
@@ -456,6 +640,17 @@ def execute_openclaw_task(
         status = "error"
     if stderr and "openclaw command not found" in str(stderr):
         status = "error"
+    if assistant_error:
+        status = "error"
+        stderr = f"{stderr}\nAssistant error: {assistant_error}".strip()
+    if runtime_model is None:
+        status = "error"
+        stderr = f"{stderr}\nCould not verify runtime provider/model from transcript.".strip()
+    elif runtime_model.lower() != requested_model.lower():
+        status = "error"
+        stderr = (
+            f"{stderr}\nModel mismatch: requested `{requested_model}` but runtime used `{runtime_model}`."
+        ).strip()
 
     # Verbose logging for debugging
     if verbose:
@@ -497,6 +692,8 @@ def execute_openclaw_task(
         "agent_id": agent_id,
         "task_id": task.task_id,
         "status": status,
+        "requested_model": requested_model,
+        "runtime_model": runtime_model,
         "transcript": transcript,
         "usage": usage,
         "workspace": str(workspace),
@@ -514,11 +711,14 @@ def run_openclaw_prompt(
     prompt: str,
     workspace: Path,
     timeout_seconds: float,
+    expected_model_ref: Optional[str] = None,
+    clear_sessions: bool = False,
 ) -> Dict[str, Any]:
     """Run a single OpenClaw prompt for helper agents like the judge."""
-    # Clean up previous session transcripts so we can reliably find this
-    # prompt's transcript (OpenClaw uses its own UUID-based naming).
-    cleanup_agent_sessions(agent_id)
+    # Optional cleanup for deterministic fresh session directories.
+    # Default is to preserve judge sessions for audit/debug/resume.
+    if clear_sessions:
+        cleanup_agent_sessions(agent_id)
 
     start_time = time.time()
     workspace.mkdir(parents=True, exist_ok=True)
@@ -591,6 +791,8 @@ def run_openclaw_prompt(
 
     transcript = _load_transcript(agent_id, session_id, start_time)
     execution_time = time.time() - start_time
+    runtime_model = _extract_runtime_model_ref(transcript)
+    assistant_error = _extract_terminal_assistant_error(transcript)
 
     status = "success"
     if timed_out:
@@ -601,10 +803,27 @@ def run_openclaw_prompt(
         status = "error"
     if stderr and "openclaw command not found" in str(stderr):
         status = "error"
+    if assistant_error:
+        status = "error"
+        stderr = f"{stderr}\nAssistant error: {assistant_error}".strip()
+
+    expected_model = normalize_model_id(expected_model_ref) if expected_model_ref else None
+    if expected_model:
+        if runtime_model is None:
+            status = "error"
+            stderr = f"{stderr}\nCould not verify runtime provider/model from judge transcript.".strip()
+        elif runtime_model.lower() != expected_model.lower():
+            status = "error"
+            stderr = (
+                f"{stderr}\nJudge model mismatch: requested `{expected_model}` "
+                f"but runtime used `{runtime_model}`."
+            ).strip()
 
     return {
         "agent_id": agent_id,
         "status": status,
+        "requested_model": expected_model,
+        "runtime_model": runtime_model,
         "transcript": transcript,
         "workspace": str(workspace),
         "exit_code": exit_code,
