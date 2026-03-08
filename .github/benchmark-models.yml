@@ -30,7 +30,7 @@ models:
 
   # DeepSeek
   - openrouter/deepseek/deepseek-chat
-  - openrouter/deepseek/deepseek-v3.2
+  #- openrouter/deepseek/deepseek-v3.2
 
   # Minimax
   - openrouter/minimax/minimax-m2.1
@@ -61,4 +61,4 @@ models:
   - openrouter/stepfun/step-3.5-flash
   - openrouter/sourceful/riverflow-v2-pro
   - openrouter/openrouter/aurora-alpha
-  - openrouter/arcee-ai/trinity-large-preview:free
+  #- openrouter/arcee-ai/trinity-large-preview:free
