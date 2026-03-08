@@ -78,10 +78,32 @@ Skip uploading with `--no-upload` if you just want local results.
 | `--suite SUITE` | `all`, `automated-only`, or comma-separated task IDs |
 | `--runs N` | Number of runs per task for averaging |
 | `--timeout-multiplier N` | Scale timeouts for slower models |
+| `--thinking LEVELS` | Comma-separated thinking levels (e.g., `low,medium,high`) |
 | `--output-dir DIR` | Where to save results (default: `results/`) |
 | `--no-upload` | Skip uploading to leaderboard |
 | `--register` | Request an API token for submissions |
 | `--upload FILE` | Upload a previous results JSON |
+
+## Thinking Levels
+
+Many models support configurable thinking/reasoning levels. Test how different reasoning depths affect task performance:
+
+```bash
+# Test multiple thinking levels
+./scripts/run.sh --model anthropic/claude-sonnet-4 --thinking low,medium,high
+
+# Compare a single level against default
+./scripts/run.sh --model anthropic/claude-sonnet-4 --thinking high
+```
+
+Valid levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`
+
+**Model-specific notes:**
+- `xhigh` is only available for GPT-5.x models (gpt-5.4, gpt-5.2, codex variants)
+- `adaptive` is provider-managed reasoning budget (Anthropic Claude 4.6 family)
+- Invalid levels for your model are warned and skipped
+
+Results include a `thinking_aggregates` section with per-level statistics, and each task result includes the `thinking_level` used.
 
 ## Contributing Tasks
 

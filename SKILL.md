@@ -73,6 +73,7 @@ uv run benchmark.py --model anthropic/claude-sonnet-4 --no-upload
 | `--output-dir` | Results directory (default: `results/`) |
 | `--timeout-multiplier` | Scale task timeouts for slower models |
 | `--runs` | Number of runs per task for averaging |
+| `--thinking` | Comma-separated thinking levels (e.g., `low,medium,high`) |
 | `--no-upload` | Skip uploading to leaderboard |
 | `--register` | Request new API token for submissions |
 | `--upload FILE` | Upload previous results JSON |
@@ -88,6 +89,29 @@ uv run benchmark.py --register
 # Run benchmark (auto-uploads with token)
 uv run benchmark.py --model anthropic/claude-sonnet-4
 ```
+
+## Thinking Levels
+
+Many models support different thinking/reasoning levels (e.g., Claude's extended thinking). PinchBench can run tasks across multiple thinking levels to measure how reasoning depth affects performance:
+
+```bash
+# Run with multiple thinking levels
+uv run benchmark.py --model anthropic/claude-sonnet-4 --thinking low,medium,high
+
+# Run with a single thinking level
+uv run benchmark.py --model anthropic/claude-sonnet-4 --thinking high
+```
+
+Valid thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`
+
+**Model-specific notes:**
+- `xhigh` is only supported by GPT-5.x models (gpt-5.4, gpt-5.2, codex variants)
+- `adaptive` is provider-managed reasoning (Anthropic Claude 4.6 family)
+- Invalid levels for your model are warned and skipped
+
+Results include per-level aggregates:
+- `thinking_aggregates`: Summary statistics for each thinking level
+- Per-task results include `thinking_level` field
 
 ## Results
 

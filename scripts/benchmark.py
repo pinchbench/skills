@@ -28,6 +28,8 @@ from lib_agent import (
     ensure_agent_exists,
     execute_openclaw_task,
     slugify_model,
+    THINKING_LEVELS,
+    validate_thinking_level,
 )
 from lib_grading import GradeResult, grade_task
 from lib_tasks import Task, TaskLoader
@@ -213,6 +215,15 @@ def _parse_args() -> argparse.Namespace:
         help="Number of runs per task for averaging",
     )
     parser.add_argument(
+        "--thinking",
+        type=str,
+        default=None,
+        help="Comma-separated thinking levels to test (e.g., 'low,medium,high'). "
+        f"Valid levels: {', '.join(THINKING_LEVELS)}. "
+        "Note: 'xhigh' requires GPT-5.x models; 'adaptive' is for Anthropic Claude 4.6. "
+        "If not specified, runs without explicit thinking level.",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -227,6 +238,43 @@ def _select_task_ids(tasks: List[Task], suite: str) -> Optional[List[str]]:
     if suite == "automated-only":
         return [task.task_id for task in tasks if task.grading_type == "automated"]
     return [task_id.strip() for task_id in suite.split(",") if task_id.strip()]
+
+
+def _parse_thinking_levels(
+    thinking_arg: Optional[str],
+    model_id: Optional[str] = None,
+) -> List[Optional[str]]:
+    """
+    Parse thinking levels from the argument.
+
+    Args:
+        thinking_arg: Comma-separated thinking levels or None
+        model_id: Optional model ID to check level compatibility
+
+    Returns:
+        List of validated thinking levels (or [None] if no explicit level).
+
+    Raises:
+        ValueError: If --thinking was provided but no levels are valid for the model.
+    """
+    if thinking_arg is None:
+        return [None]  # Run once without explicit thinking level
+
+    levels: List[str] = []
+    seen = set()
+    for level in thinking_arg.split(","):
+        validated = validate_thinking_level(level.strip(), model_id)
+        if validated and validated not in seen:
+            levels.append(validated)
+            seen.add(validated)
+
+    if not levels:
+        raise ValueError(
+            "No valid thinking levels remain after validation. "
+            "Check your --thinking values for this model."
+        )
+
+    return levels
 
 
 def _next_run_id(run_root: Path) -> str:
@@ -363,8 +411,13 @@ def main():
     cleanup_agent_sessions(agent_id)
 
     task_ids = _select_task_ids(runner.tasks, args.suite)
+    try:
+        thinking_levels = _parse_thinking_levels(args.thinking, args.model)
+    except ValueError as exc:
+        logger.error(str(exc))
+        sys.exit(2)
     results = []
-    grades_by_task_id = {}
+    grades_by_task_and_thinking: Dict[str, Dict[str, Any]] = {}
 
     tasks_to_run = runner.tasks
     if task_ids is not None:
@@ -372,88 +425,133 @@ def main():
     tasks_by_id = {task.task_id: task for task in tasks_to_run}
 
     runs_per_task = max(1, args.runs)
-    for i, task in enumerate(tasks_to_run, 1):
-        task_grades = []
-        for run_index in range(runs_per_task):
-            logger.info("\n%s", "=" * 80)
-            logger.info(
-                "📋 Task %s/%s (Run %s/%s)",
-                i,
-                len(tasks_to_run),
-                run_index + 1,
-                runs_per_task,
-            )
-            logger.info("%s", "=" * 80)
-            execution_error = None
-            try:
-                result = execute_openclaw_task(
-                    task=task,
-                    agent_id=agent_id,
-                    model_id=args.model,
-                    run_id=f"{run_id}-{run_index + 1}",
-                    timeout_multiplier=args.timeout_multiplier,
-                    skill_dir=skill_dir,
-                    verbose=args.verbose,
-                )
-            except Exception as exc:
-                execution_error = str(exc)
-                logger.warning(
-                    "Task execution failed for %s, continuing: %s", task.task_id, exc
-                )
-                result = {
-                    "agent_id": agent_id,
-                    "task_id": task.task_id,
-                    "status": "error",
-                    "transcript": [],
-                    "usage": {},
-                    "workspace": "",
-                    "exit_code": -1,
-                    "timed_out": False,
-                    "execution_time": 0.0,
-                    "stdout": "",
-                    "stderr": execution_error,
-                }
-            try:
-                grade = grade_task(task=task, execution_result=result, skill_dir=skill_dir, verbose=args.verbose)
-            except Exception as exc:
-                if execution_error:
-                    note = f"Execution failed: {execution_error}; Grading failed: {exc}"
-                else:
-                    note = f"Grading failed: {exc}"
-                logger.warning("Task grading failed for %s, continuing: %s", task.task_id, exc)
-                grade = GradeResult(
-                    task_id=task.task_id,
-                    score=0.0,
-                    max_score=1.0,
-                    grading_type=task.grading_type,
-                    breakdown={},
-                    notes=note,
-                )
-            task_grades.append(grade)
-            results.append(result)
+    total_runs = len(tasks_to_run) * runs_per_task * len(thinking_levels)
+    run_counter = 0
 
-            # Log score immediately after grading
-            score_pct = grade.score / grade.max_score * 100 if grade.max_score > 0 else 0
-            status_emoji = "✅" if grade.score >= grade.max_score else "⚠️" if grade.score > 0 else "❌"
-            logger.info(
-                "%s Task %s: %.1f/%.1f (%.0f%%) - %s",
-                status_emoji,
-                task.task_id,
-                grade.score,
-                grade.max_score,
-                score_pct,
-                grade.grading_type,
-            )
-            if grade.notes:
-                logger.info("   Notes: %s", grade.notes[:200])
+    for thinking_level in thinking_levels:
+        thinking_label = thinking_level or "default"
+        logger.info("\n%s", "=" * 80)
+        logger.info("🧠 Thinking Level: %s", thinking_label)
+        logger.info("%s", "=" * 80)
 
-        task_scores = [grade.score for grade in task_grades]
-        grades_by_task_id[task.task_id] = {
-            "runs": [grade.to_dict() for grade in task_grades],
-            "mean": statistics.mean(task_scores),
-            "std": statistics.stdev(task_scores) if len(task_scores) > 1 else 0.0,
-            "min": min(task_scores),
-            "max": max(task_scores),
+        for i, task in enumerate(tasks_to_run, 1):
+            task_key = f"{task.task_id}:{thinking_label}" if thinking_level else task.task_id
+            task_grades = []
+
+            for run_index in range(runs_per_task):
+                run_counter += 1
+                logger.info("\n%s", "-" * 80)
+                logger.info(
+                    "📋 Task %s/%s (Run %s/%s) [%s] — Overall progress: %s/%s",
+                    i,
+                    len(tasks_to_run),
+                    run_index + 1,
+                    runs_per_task,
+                    thinking_label,
+                    run_counter,
+                    total_runs,
+                )
+                logger.info("%s", "-" * 80)
+                execution_error = None
+                try:
+                    result = execute_openclaw_task(
+                        task=task,
+                        agent_id=agent_id,
+                        model_id=args.model,
+                        run_id=f"{run_id}-{run_index + 1}",
+                        timeout_multiplier=args.timeout_multiplier,
+                        skill_dir=skill_dir,
+                        thinking_level=thinking_level,
+                        verbose=args.verbose,
+                    )
+                except Exception as exc:
+                    execution_error = str(exc)
+                    logger.warning(
+                        "Task execution failed for %s, continuing: %s", task.task_id, exc
+                    )
+                    result = {
+                        "agent_id": agent_id,
+                        "task_id": task.task_id,
+                        "thinking_level": thinking_level,
+                        "status": "error",
+                        "transcript": [],
+                        "usage": {},
+                        "workspace": "",
+                        "exit_code": -1,
+                        "timed_out": False,
+                        "execution_time": 0.0,
+                        "stdout": "",
+                        "stderr": execution_error,
+                    }
+                try:
+                    grade = grade_task(
+                        task=task,
+                        execution_result=result,
+                        skill_dir=skill_dir,
+                        verbose=args.verbose,
+                    )
+                except Exception as exc:
+                    if execution_error:
+                        note = f"Execution failed: {execution_error}; Grading failed: {exc}"
+                    else:
+                        note = f"Grading failed: {exc}"
+                    logger.warning("Task grading failed for %s, continuing: %s", task.task_id, exc)
+                    grade = GradeResult(
+                        task_id=task.task_id,
+                        score=0.0,
+                        max_score=1.0,
+                        grading_type=task.grading_type,
+                        breakdown={},
+                        notes=note,
+                    )
+                task_grades.append(grade)
+                result["thinking_level"] = thinking_level
+                results.append(result)
+
+                score_pct = grade.score / grade.max_score * 100 if grade.max_score > 0 else 0
+                status_emoji = "✅" if grade.score >= grade.max_score else "⚠️" if grade.score > 0 else "❌"
+                logger.info(
+                    "%s Task %s [%s]: %.1f/%.1f (%.0f%%) - %s",
+                    status_emoji,
+                    task.task_id,
+                    thinking_label,
+                    grade.score,
+                    grade.max_score,
+                    score_pct,
+                    grade.grading_type,
+                )
+                if grade.notes:
+                    logger.info("   Notes: %s", grade.notes[:200])
+
+            task_scores = [grade.score for grade in task_grades]
+            grades_by_task_and_thinking[task_key] = {
+                "task_id": task.task_id,
+                "thinking_level": thinking_level,
+                "runs": [grade.to_dict() for grade in task_grades],
+                "mean": statistics.mean(task_scores),
+                "std": statistics.stdev(task_scores) if len(task_scores) > 1 else 0.0,
+                "min": min(task_scores),
+                "max": max(task_scores),
+            }
+
+    # Compute per-thinking-level aggregates
+    thinking_aggregates: Dict[str, Dict[str, Any]] = {}
+    for thinking_level in thinking_levels:
+        thinking_label = thinking_level or "default"
+        level_keys = [
+            k for k, v in grades_by_task_and_thinking.items()
+            if v.get("thinking_level") == thinking_level
+        ]
+        if not level_keys:
+            continue
+        scores = [grades_by_task_and_thinking[k]["mean"] for k in level_keys]
+        thinking_aggregates[thinking_label] = {
+            "thinking_level": thinking_label,
+            "task_count": len(scores),
+            "mean_score": statistics.mean(scores) if scores else 0.0,
+            "std_score": statistics.stdev(scores) if len(scores) > 1 else 0.0,
+            "min_score": min(scores) if scores else 0.0,
+            "max_score": max(scores) if scores else 0.0,
         }
 
     output_dir = Path(args.output_dir)
@@ -465,16 +563,22 @@ def main():
         "timestamp": time.time(),
         "suite": args.suite,
         "runs_per_task": runs_per_task,
+        "thinking_levels": [tl or "default" for tl in thinking_levels],
+        "thinking_aggregates": thinking_aggregates,
         "tasks": [
             {
                 "task_id": result["task_id"],
+                "thinking_level": result.get("thinking_level"),
                 "status": result["status"],
                 "timed_out": result["timed_out"],
                 "execution_time": result["execution_time"],
                 "transcript_length": len(result["transcript"]),
                 "usage": result.get("usage", {}),
                 "workspace": result["workspace"],
-                "grading": grades_by_task_id[result["task_id"]],
+                "grading": grades_by_task_and_thinking.get(
+                    f"{result['task_id']}:{result.get('thinking_level') or 'default'}",
+                    grades_by_task_and_thinking.get(result["task_id"], {}),
+                ),
                 "frontmatter": tasks_by_id[result["task_id"]].frontmatter,
             }
             for result in results
