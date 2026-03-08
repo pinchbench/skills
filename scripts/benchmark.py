@@ -223,6 +223,12 @@ def _parse_args() -> argparse.Namespace:
         "Note: 'xhigh' requires GPT-5.x models; 'adaptive' is for Anthropic Claude 4.6. "
         "If not specified, runs without explicit thinking level.",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose logging (shows transcript contents, workspace files, etc.)",
+    )
     return parser.parse_args()
 
 
@@ -456,6 +462,7 @@ def main():
                         timeout_multiplier=args.timeout_multiplier,
                         skill_dir=skill_dir,
                         thinking_level=thinking_level,
+                        verbose=args.verbose,
                     )
                 except Exception as exc:
                     execution_error = str(exc)
@@ -477,7 +484,12 @@ def main():
                         "stderr": execution_error,
                     }
                 try:
-                    grade = grade_task(task=task, execution_result=result, skill_dir=skill_dir)
+                    grade = grade_task(
+                        task=task,
+                        execution_result=result,
+                        skill_dir=skill_dir,
+                        verbose=args.verbose,
+                    )
                 except Exception as exc:
                     if execution_error:
                         note = f"Execution failed: {execution_error}; Grading failed: {exc}"
@@ -495,6 +507,21 @@ def main():
                 task_grades.append(grade)
                 result["thinking_level"] = thinking_level
                 results.append(result)
+
+                score_pct = grade.score / grade.max_score * 100 if grade.max_score > 0 else 0
+                status_emoji = "✅" if grade.score >= grade.max_score else "⚠️" if grade.score > 0 else "❌"
+                logger.info(
+                    "%s Task %s [%s]: %.1f/%.1f (%.0f%%) - %s",
+                    status_emoji,
+                    task.task_id,
+                    thinking_label,
+                    grade.score,
+                    grade.max_score,
+                    score_pct,
+                    grade.grading_type,
+                )
+                if grade.notes:
+                    logger.info("   Notes: %s", grade.notes[:200])
 
             task_scores = [grade.score for grade in task_grades]
             grades_by_task_and_thinking[task_key] = {
