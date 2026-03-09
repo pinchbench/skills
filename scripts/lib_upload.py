@@ -40,6 +40,7 @@ def upload_results(
     *,
     server_url: str | None = None,
     token: str | None = None,
+    official_key: str | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     dry_run: bool = False,
 ) -> UploadResult:
@@ -50,6 +51,7 @@ def upload_results(
         results_path: Path to the JSON results file
         server_url: Override server URL (default: from env or api.pinchbench.com)
         token: Auth token (default: from PINCHBENCH_TOKEN env var)
+        official_key: Official key to mark submission as official (default: from PINCHBENCH_OFFICIAL_KEY env var)
         timeout_seconds: HTTP request timeout
         dry_run: If True, validate but don't actually send
 
@@ -61,6 +63,7 @@ def upload_results(
     """
     resolved_server = server_url or os.environ.get("PINCHBENCH_SERVER_URL") or DEFAULT_SERVER_URL
     resolved_token = _resolve_token(token)
+    resolved_official_key = official_key or os.environ.get("PINCHBENCH_OFFICIAL_KEY")
     if not resolved_token:
         raise UploadError("PINCHBENCH_TOKEN is not configured")
 
@@ -76,6 +79,8 @@ def upload_results(
         "X-PinchBench-Version": payload.get("client_version", ""),
         "User-Agent": "PinchBench/" + (payload.get("client_version") or "unknown"),
     }
+    if resolved_official_key:
+        headers["X-PinchBench-Official-Key"] = resolved_official_key
     req = request.Request(endpoint, data=body, headers=headers, method="POST")
     try:
         with request.urlopen(req, timeout=timeout_seconds) as resp:
@@ -145,7 +150,9 @@ def register_token(
             error_payload = json.loads(error_body) if error_body else {}
         except Exception:
             error_payload = {}
-        raise UploadError(f"Registration failed ({exc.code}): {error_payload or exc.reason}") from exc
+        raise UploadError(
+            f"Registration failed ({exc.code}): {error_payload or exc.reason}"
+        ) from exc
     except error.URLError as exc:
         raise UploadError(f"Registration failed (network): {exc.reason}") from exc
 
@@ -194,11 +201,7 @@ def _build_payload(results_path: Path) -> Dict[str, Any]:
         elif runs:
             max_for_task = float(
                 max(
-                    (
-                        float(run.get("max_score", 0.0))
-                        for run in runs
-                        if isinstance(run, dict)
-                    ),
+                    (float(run.get("max_score", 0.0)) for run in runs if isinstance(run, dict)),
                     default=0.0,
                 )
             )

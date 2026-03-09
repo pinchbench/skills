@@ -70,6 +70,19 @@ To get your results on the leaderboard:
 
 Skip uploading with `--no-upload` if you just want local results.
 
+### Official Results
+
+To submit an official run (marked on the leaderboard):
+
+```bash
+# Using environment variable
+export PINCHBENCH_OFFICIAL_KEY=your_official_key
+./scripts/run.sh --model anthropic/claude-sonnet-4
+
+# Using command line flag
+./scripts/run.sh --model anthropic/claude-sonnet-4 --official-key your_official_key
+```
+
 ## Command Reference
 
 | Flag | Description |
@@ -82,6 +95,7 @@ Skip uploading with `--no-upload` if you just want local results.
 | `--no-upload` | Skip uploading to leaderboard |
 | `--register` | Request an API token for submissions |
 | `--upload FILE` | Upload a previous results JSON |
+| `--official-key KEY` | Mark submission as official (or use PINCHBENCH_OFFICIAL_KEY env var) |
 
 ## Contributing Tasks
 

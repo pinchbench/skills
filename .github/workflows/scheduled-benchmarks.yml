@@ -23,6 +23,11 @@ on:
         required: false
         default: true
         type: boolean
+      official:
+        description: 'Mark as official run (requires PINCHBENCH_OFFICIAL_KEY)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -167,6 +172,8 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # Pre-shared token for identifying GitHub Actions runs on leaderboard
           PINCHBENCH_TOKEN: ${{ secrets.PINCHBENCH_TOKEN }}
+          # Official key for marking runs as official results
+          PINCHBENCH_OFFICIAL_KEY: ${{ inputs.official && secrets.PINCHBENCH_OFFICIAL_KEY || '' }}
         run: |
           UPLOAD_FLAG=""
           if [ "$BENCHMARK_UPLOAD" = "false" ]; then

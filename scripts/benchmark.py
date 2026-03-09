@@ -218,6 +218,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable verbose logging (shows transcript contents, workspace files, etc.)",
     )
+    parser.add_argument(
+        "--official-key",
+        type=str,
+        metavar="KEY",
+        help="Official key to mark submission as official (can also use PINCHBENCH_OFFICIAL_KEY env var)",
+    )
     return parser.parse_args()
 
 
@@ -397,9 +403,7 @@ def main():
                 )
             except Exception as exc:
                 execution_error = str(exc)
-                logger.warning(
-                    "Task execution failed for %s, continuing: %s", task.task_id, exc
-                )
+                logger.warning("Task execution failed for %s, continuing: %s", task.task_id, exc)
                 result = {
                     "agent_id": agent_id,
                     "task_id": task.task_id,
@@ -414,7 +418,9 @@ def main():
                     "stderr": execution_error,
                 }
             try:
-                grade = grade_task(task=task, execution_result=result, skill_dir=skill_dir, verbose=args.verbose)
+                grade = grade_task(
+                    task=task, execution_result=result, skill_dir=skill_dir, verbose=args.verbose
+                )
             except Exception as exc:
                 if execution_error:
                     note = f"Execution failed: {execution_error}; Grading failed: {exc}"
@@ -434,7 +440,9 @@ def main():
 
             # Log score immediately after grading
             score_pct = grade.score / grade.max_score * 100 if grade.max_score > 0 else 0
-            status_emoji = "✅" if grade.score >= grade.max_score else "⚠️" if grade.score > 0 else "❌"
+            status_emoji = (
+                "✅" if grade.score >= grade.max_score else "⚠️" if grade.score > 0 else "❌"
+            )
             logger.info(
                 "%s Task %s: %.1f/%.1f (%.0f%%) - %s",
                 status_emoji,
@@ -491,7 +499,7 @@ def main():
         try:
             from lib_upload import UploadError, upload_results
 
-            result = upload_results(output_path)
+            result = upload_results(output_path, official_key=args.official_key)
             if result.rank is not None:
                 logger.info("Uploaded to leaderboard: rank #%s", result.rank)
             if result.leaderboard_url:
