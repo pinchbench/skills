@@ -18,6 +18,7 @@ import logging
 import os
 import statistics
 import subprocess
+import time
 import sys
 import time
 from pathlib import Path
@@ -414,6 +415,8 @@ def main():
                     "stderr": execution_error,
                 }
             try:
+                # Small delay to ensure any pending file writes are flushed to disk
+                time.sleep(2)
                 grade = grade_task(task=task, execution_result=result, skill_dir=skill_dir, verbose=args.verbose)
             except Exception as exc:
                 if execution_error:
