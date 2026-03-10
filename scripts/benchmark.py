@@ -62,8 +62,6 @@ class OpenClawAgent:
         Returns:
             Dictionary containing execution results
         """
-        if simulate:
-            logger.info("Simulate flag no longer supported for execute_task")
         raise NotImplementedError("Use execute_openclaw_task helper for real runs")
 
 

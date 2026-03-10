@@ -257,13 +257,17 @@ def _summarize_transcript(transcript: List[Dict[str, Any]]) -> str:
                     )
         elif role == "toolResult":
             content = msg.get("content", [])
-            if content:
+            if isinstance(content, str):
+                summary_parts.append(f"Result: {content[:200]}")
+            elif isinstance(content, list) and content:
                 result_preview = str(content[0])[:200]
                 summary_parts.append(f"Result: {result_preview}")
         elif role == "user":
             content = msg.get("content", [])
-            if content:
-                summary_parts.append(f"User: {content[0]}")
+            if isinstance(content, str):
+                summary_parts.append(f"User: {content[:200]}")
+            elif isinstance(content, list) and content:
+                summary_parts.append(f"User: {str(content[0])[:200]}")
     return "\n".join(summary_parts)
 
 
@@ -418,9 +422,15 @@ def _normalize_judge_response(parsed: Dict[str, Any]) -> Dict[str, Any]:
     
     # Extract total score
     if "total" in parsed and parsed["total"] is not None:
-        result["total"] = float(parsed["total"]) if isinstance(parsed["total"], (int, float)) else None
-    elif "score" in parsed and isinstance(parsed["score"], (int, float)):
-        result["total"] = float(parsed["score"])
+        try:
+            result["total"] = float(parsed["total"])
+        except (TypeError, ValueError):
+            result["total"] = None
+    elif "score" in parsed and parsed["score"] is not None:
+        try:
+            result["total"] = float(parsed["score"])
+        except (TypeError, ValueError):
+            pass
     elif result["scores"]:
         # Calculate average if we have individual scores but no total
         values = [v for v in result["scores"].values() if isinstance(v, (int, float))]

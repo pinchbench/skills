@@ -18,7 +18,7 @@ from urllib import error, request
 
 DEFAULT_SERVER_URL = "https://api.pinchbench.com"
 DEFAULT_TIMEOUT_SECONDS = 30.0
-CONFIG_DIR = Path(__file__).resolve().parent / ".pinchbench"
+CONFIG_DIR = Path.home() / ".pinchbench"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
 
@@ -302,7 +302,7 @@ def _format_timestamp(timestamp: Any) -> str:
 
 
 def _read_client_version() -> str:
-    pyproject = Path(__file__).with_name("pyproject.toml")
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
     if not pyproject.exists():
         return ""
     for line in pyproject.read_text(encoding="utf-8").splitlines():
@@ -368,9 +368,9 @@ def _collect_linux_info() -> Dict[str, Any]:
         total_kb = _parse_meminfo_value(meminfo, "MemTotal")
         avail_kb = _parse_meminfo_value(meminfo, "MemAvailable")
         if total_kb is not None:
-            info["memory_total_gb"] = round(total_kb / 1e6, 1)
+            info["memory_total_gb"] = round(total_kb / (1024 * 1024), 1)
         if avail_kb is not None:
-            info["memory_available_gb"] = round(avail_kb / 1e6, 1)
+            info["memory_available_gb"] = round(avail_kb / (1024 * 1024), 1)
     except OSError:
         pass
 
