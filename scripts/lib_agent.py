@@ -74,35 +74,50 @@ def validate_openrouter_model(model_id: str, timeout_seconds: float = 10.0) -> b
     
     logger.info("🔍 Validating model: %s", bare_model_id)
     
-    # Query OpenRouter models API
-    endpoint = "https://openrouter.ai/api/v1/models"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "HTTP-Referer": "https://pinchbench.com",
         "X-Title": "PinchBench",
     }
     
-    req = request.Request(endpoint, headers=headers, method="GET")
+    # First, try the specific model endpoint (fast path for valid models)
+    encoded_model_id = bare_model_id.replace("/", "%2F")
+    specific_endpoint = f"https://openrouter.ai/api/v1/models/{encoded_model_id}"
+    req = request.Request(specific_endpoint, headers=headers, method="GET")
+    try:
+        with request.urlopen(req, timeout=timeout_seconds) as resp:
+            # Model exists - validation passed
+            logger.info("✅ Model validated: %s", bare_model_id)
+            return True
+    except error.HTTPError as exc:
+        if exc.code == 404:
+            # Model not found - fall through to fetch full catalog for suggestions
+            pass
+        else:
+            logger.warning("OpenRouter API error during validation: %s", exc)
+            return True
+    except error.URLError as exc:
+        logger.warning("Network error during model validation: %s", exc)
+        return True
+    
+    # Model not found - fetch full catalog for "did you mean" suggestions
+    catalog_endpoint = "https://openrouter.ai/api/v1/models"
+    req = request.Request(catalog_endpoint, headers=headers, method="GET")
     try:
         with request.urlopen(req, timeout=timeout_seconds) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:
-        logger.warning("OpenRouter API error during validation: %s", exc)
-        # Don't fail on API errors - maybe rate limited or temporary issue
-        return True
+        logger.warning("OpenRouter API error fetching model catalog: %s", exc)
+        raise ModelValidationError(f"Model '{bare_model_id}' not found on OpenRouter.")
     except error.URLError as exc:
-        logger.warning("Network error during model validation: %s", exc)
-        return True
+        logger.warning("Network error fetching model catalog: %s", exc)
+        raise ModelValidationError(f"Model '{bare_model_id}' not found on OpenRouter.")
     except json.JSONDecodeError as exc:
         logger.warning("Failed to parse OpenRouter response: %s", exc)
-        return True
+        raise ModelValidationError(f"Model '{bare_model_id}' not found on OpenRouter.")
     
     models = data.get("data", [])
-    model_ids = {m.get("id") for m in models if isinstance(m, dict)}
-    
-    if bare_model_id in model_ids:
-        logger.info("✅ Model validated: %s", bare_model_id)
-        return True
+    model_ids = {m.get("id") for m in models if isinstance(m, dict) and m.get("id")}
     
     # Check for close matches (typos)
     close_matches = []
