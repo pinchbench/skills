@@ -626,6 +626,12 @@ def main():
     output_path = output_dir / f"{run_id}_{model_slug}.json"
     output_path.write_text(json.dumps(aggregate, indent=2), encoding="utf-8")
 
+    # Calculate and log final score summary
+    total_score = sum(grades_by_task_id[tid]["mean"] for tid in grades_by_task_id)
+    max_score = float(len(grades_by_task_id))  # Each task has max_score of 1.0
+    score_pct = (total_score / max_score * 100) if max_score > 0 else 0
+    logger.info("📊 Final score: %.2f/%.0f (%.1f%%)", total_score, max_score, score_pct)
+
     logger.info("Saved results to %s", output_path)
     _log_efficiency_summary(efficiency, grades_by_task_id)
     if args.no_upload:
@@ -635,6 +641,8 @@ def main():
             from lib_upload import UploadError, upload_results
 
             result = upload_results(output_path, official_key=args.official_key)
+            if result.submission_id:
+                logger.info("Submission ID: %s", result.submission_id)
             if result.rank is not None:
                 logger.info("Uploaded to leaderboard: rank #%s", result.rank)
             if result.leaderboard_url:
