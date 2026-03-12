@@ -30,13 +30,16 @@ git clone https://github.com/pinchbench/skill.git
 cd skill
 
 # Run benchmarks with your model of choice
-./scripts/run.sh --model anthropic/claude-sonnet-4
+./scripts/run.sh --model openrouter/anthropic/claude-sonnet-4
 
 # Or run specific tasks
-./scripts/run.sh --model openai/gpt-4o --suite task_01_calendar,task_02_stock
+./scripts/run.sh --model openrouter/openai/gpt-4o --suite task_01_calendar,task_02_stock
 ```
 
+> **Note:** Model IDs must include their provider prefix (e.g. `openrouter/`, `anthropic/`). [OpenRouter](https://openrouter.ai) is the default provider used for routing.
+
 **Requirements:**
+
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) package manager
 - A running OpenClaw instance
@@ -45,16 +48,16 @@ cd skill
 
 PinchBench includes 23 tasks across real-world categories:
 
-| Category | Tasks | What's tested |
-|----------|-------|---------------|
-| **Productivity** | Calendar, daily summaries | Event creation, time parsing, scheduling |
-| **Research** | Stock prices, conferences, markets | Web search, data extraction, synthesis |
-| **Writing** | Blog posts, emails, humanization | Content generation, tone, formatting |
-| **Coding** | Weather scripts, file structures | Code generation, file operations |
-| **Analysis** | Spreadsheets, PDFs, documents | Data processing, summarization |
-| **Email** | Triage, search | Inbox management, filtering |
-| **Memory** | Context retrieval, knowledge management | Long-term memory, recall |
-| **Skills** | ClawHub, skill discovery | OpenClaw ecosystem integration |
+| Category         | Tasks                                   | What's tested                            |
+| ---------------- | --------------------------------------- | ---------------------------------------- |
+| **Productivity** | Calendar, daily summaries               | Event creation, time parsing, scheduling |
+| **Research**     | Stock prices, conferences, markets      | Web search, data extraction, synthesis   |
+| **Writing**      | Blog posts, emails, humanization        | Content generation, tone, formatting     |
+| **Coding**       | Weather scripts, file structures        | Code generation, file operations         |
+| **Analysis**     | Spreadsheets, PDFs, documents           | Data processing, summarization           |
+| **Email**        | Triage, search                          | Inbox management, filtering              |
+| **Memory**       | Context retrieval, knowledge management | Long-term memory, recall                 |
+| **Skills**       | ClawHub, skill discovery                | OpenClaw ecosystem integration           |
 
 Each task is graded automatically, by an LLM judge, or both — ensuring both objective and nuanced evaluation.
 
@@ -67,7 +70,7 @@ To get your results on the leaderboard:
 ./scripts/run.sh --register
 
 # Run benchmark — results auto-upload with your token
-./scripts/run.sh --model anthropic/claude-sonnet-4
+./scripts/run.sh --model openrouter/anthropic/claude-sonnet-4
 ```
 
 Skip uploading with `--no-upload` if you just want local results.
@@ -87,17 +90,18 @@ export PINCHBENCH_OFFICIAL_KEY=your_official_key
 
 ## Command Reference
 
-| Flag | Description |
-|------|-------------|
-| `--model MODEL` | Model to test (e.g., `anthropic/claude-sonnet-4`) |
-| `--suite SUITE` | `all`, `automated-only`, or comma-separated task IDs |
-| `--runs N` | Number of runs per task for averaging |
-| `--timeout-multiplier N` | Scale timeouts for slower models |
-| `--output-dir DIR` | Where to save results (default: `results/`) |
-| `--no-upload` | Skip uploading to leaderboard |
-| `--register` | Request an API token for submissions |
-| `--upload FILE` | Upload a previous results JSON |
-| `--official-key KEY` | Mark submission as official (or use PINCHBENCH_OFFICIAL_KEY env var) |
+| Flag                     | Description                                                                   |
+| ------------------------ | ----------------------------------------------------------------------------- |
+| `--model MODEL`          | Model to test (e.g., `openrouter/anthropic/claude-sonnet-4`)                  |
+| `--judge MODEL`          | Judge model for LLM grading (default: `openrouter/anthropic/claude-opus-4.5`) |
+| `--suite SUITE`          | `all`, `automated-only`, or comma-separated task IDs                          |
+| `--runs N`               | Number of runs per task for averaging                                         |
+| `--timeout-multiplier N` | Scale timeouts for slower models                                              |
+| `--output-dir DIR`       | Where to save results (default: `results/`)                                   |
+| `--no-upload`            | Skip uploading to leaderboard                                                 |
+| `--register`             | Request an API token for submissions                                          |
+| `--upload FILE`          | Upload a previous results JSON                                                |
+| `--official-key KEY`     | Mark submission as official (or use `PINCHBENCH_OFFICIAL_KEY` env var)         |
 
 ## Contributing Tasks
 
@@ -120,4 +124,4 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ---
 
-*Claw-some AI agent testing* 🦞
+_Claw-some AI agent testing_ 🦞

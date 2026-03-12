@@ -213,6 +213,11 @@ def _parse_args() -> argparse.Namespace:
         help="Number of runs per task for averaging",
     )
     parser.add_argument(
+        "--judge",
+        default=None,
+        help="Judge model identifier (default: openrouter/anthropic/claude-opus-4.5)",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -540,9 +545,10 @@ def main():
                     "stderr": execution_error,
                 }
             try:
-                grade = grade_task(
-                    task=task, execution_result=result, skill_dir=skill_dir, verbose=args.verbose
-                )
+                grade_kwargs = dict(task=task, execution_result=result, skill_dir=skill_dir, verbose=args.verbose)
+                if args.judge:
+                    grade_kwargs["judge_model"] = args.judge
+                grade = grade_task(**grade_kwargs)
             except Exception as exc:
                 if execution_error:
                     note = f"Execution failed: {execution_error}; Grading failed: {exc}"

@@ -23,17 +23,6 @@ def slugify_model(model_id: str) -> str:
     return model_id.replace("/", "-").replace(".", "-")
 
 
-KNOWN_PROVIDERS = ("openrouter/", "vllm/", "ollama/", "nvidia-api/", "nvidia-nemotron/")
-
-
-def normalize_model_id(model_id: str) -> str:
-    """Ensure model id is provider-qualified for OpenClaw."""
-    if "/" not in model_id:
-        return model_id
-    if any(model_id.startswith(p) for p in KNOWN_PROVIDERS):
-        return model_id
-    return f"openrouter/{model_id}"
-
 
 def _get_agent_workspace(agent_id: str) -> Path | None:
     """Get the workspace path for an agent from OpenClaw config."""
@@ -130,7 +119,6 @@ def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bo
                 check=False,
             )
 
-    normalized_model = normalize_model_id(model_id)
     logger.info("Creating OpenClaw agent %s", agent_id)
     try:
         create_result = subprocess.run(
@@ -140,7 +128,7 @@ def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bo
                 "add",
                 agent_id,
                 "--model",
-                normalized_model,
+                model_id,
                 "--workspace",
                 str(workspace_dir),
                 "--non-interactive",
