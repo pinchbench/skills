@@ -27,7 +27,9 @@ from lib_agent import (
     cleanup_agent_sessions,
     ensure_agent_exists,
     execute_openclaw_task,
+    ModelValidationError,
     slugify_model,
+    validate_openrouter_model,
 )
 from lib_grading import GradeResult, grade_task
 from lib_tasks import Task, TaskLoader
@@ -491,6 +493,13 @@ def main():
     agent_id = f"bench-{model_slug}"
     # Use a shared workspace for the agent - we'll copy fixtures per task
     agent_workspace = Path(f"/tmp/pinchbench/{run_id}/agent_workspace")
+
+    # Validate model exists before wasting time on tasks
+    try:
+        validate_openrouter_model(args.model)
+    except ModelValidationError as exc:
+        logger.error("❌ %s", exc)
+        sys.exit(1)
 
     ensure_agent_exists(agent_id, args.model, agent_workspace)
     cleanup_agent_sessions(agent_id)
