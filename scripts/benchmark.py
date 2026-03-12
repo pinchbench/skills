@@ -419,6 +419,74 @@ def _log_efficiency_summary(
     logger.info("%s", "=" * 80)
 
 
+def _log_category_summary(
+    task_entries: List[Dict[str, Any]],
+    tasks_by_id: Dict[str, Any],
+) -> None:
+    """Log a summary grouped by category, matching the PinchBench website format."""
+    # Group scores by category
+    category_scores: Dict[str, Dict[str, float]] = {}
+    
+    for entry in task_entries:
+        task_id = entry["task_id"]
+        task = tasks_by_id.get(task_id)
+        if not task:
+            continue
+        
+        category = task.category.upper() if task.category else "UNCATEGORIZED"
+        grading = entry.get("grading", {})
+        mean_score = float(grading.get("mean", 0.0))
+        max_score = 1.0  # Each task is scored 0-1
+        
+        if category not in category_scores:
+            category_scores[category] = {"earned": 0.0, "possible": 0.0, "task_count": 0}
+        
+        category_scores[category]["earned"] += mean_score
+        category_scores[category]["possible"] += max_score
+        category_scores[category]["task_count"] += 1
+    
+    # Calculate overall totals
+    total_earned = sum(c["earned"] for c in category_scores.values())
+    total_possible = sum(c["possible"] for c in category_scores.values())
+    overall_pct = (total_earned / total_possible * 100) if total_possible > 0 else 0
+    
+    logger.info("\n%s", "=" * 80)
+    logger.info("🦀 PINCHBENCH SCORE SUMMARY")
+    logger.info("%s", "=" * 80)
+    logger.info("")
+    logger.info("   Overall Score: %.1f%% (%.1f / %.1f)", overall_pct, total_earned, total_possible)
+    logger.info("")
+    logger.info("   %-20s %8s %12s", "CATEGORY", "SCORE", "TASKS")
+    logger.info("   %s", "-" * 44)
+    
+    # Sort categories alphabetically for consistent output
+    for category in sorted(category_scores.keys()):
+        data = category_scores[category]
+        pct = (data["earned"] / data["possible"] * 100) if data["possible"] > 0 else 0
+        task_count = int(data["task_count"])
+        task_label = "task" if task_count == 1 else "tasks"
+        
+        # Color indicator based on score
+        if pct >= 90:
+            indicator = "🟢"
+        elif pct >= 70:
+            indicator = "🟡"
+        else:
+            indicator = "🔴"
+        
+        logger.info(
+            "   %s %-17s %6.1f%% %6d %s",
+            indicator,
+            category,
+            pct,
+            task_count,
+            task_label,
+        )
+    
+    logger.info("   %s", "-" * 44)
+    logger.info("%s", "=" * 80)
+
+
 def main():
     """Main entry point for the benchmark script."""
     # Determine tasks directory
@@ -627,6 +695,7 @@ def main():
     output_path.write_text(json.dumps(aggregate, indent=2), encoding="utf-8")
 
     logger.info("Saved results to %s", output_path)
+    _log_category_summary(task_entries, tasks_by_id)
     _log_efficiency_summary(efficiency, grades_by_task_id)
     if args.no_upload:
         logger.info("Skipping upload (--no-upload)")
