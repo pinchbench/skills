@@ -18,8 +18,8 @@ import logging
 import os
 import statistics
 import subprocess
-import sys
 import time
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
