@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -177,8 +178,6 @@ def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task, agent_id: s
     Prepare workspace for a task by copying fixtures.
     Uses the agent's configured workspace to ensure files are in the right place.
     """
-    import shutil
-
     # Get agent's workspace from agent config
     workspace = _get_agent_workspace(agent_id)
     if workspace is None:
@@ -229,7 +228,6 @@ def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task, agent_id: s
             if skill_dir_src.is_dir():
                 dest_skill_dir = dest_skills_dir / skill_dir_src.name
                 # Copy skill directory
-                import shutil
                 if dest_skill_dir.exists():
                     shutil.rmtree(dest_skill_dir)
                 shutil.copytree(skill_dir_src, dest_skill_dir)
