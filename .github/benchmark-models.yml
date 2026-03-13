@@ -61,4 +61,5 @@ models:
   - openrouter/stepfun/step-3.5-flash
   - openrouter/sourceful/riverflow-v2-pro
   - openrouter/openrouter/aurora-alpha
+  - openrouter/amazon/nova-2-lite-v1
   #- openrouter/arcee-ai/trinity-large-preview:free

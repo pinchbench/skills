@@ -214,10 +214,21 @@ def _parse_args() -> argparse.Namespace:
         help="Number of runs per task for averaging",
     )
     parser.add_argument(
+        "--judge",
+        default=None,
+        help="Judge model identifier (default: openrouter/anthropic/claude-opus-4.5)",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
         help="Enable verbose logging (shows transcript contents, workspace files, etc.)",
+    )
+    parser.add_argument(
+        "--official-key",
+        type=str,
+        metavar="KEY",
+        help="Official key to mark submission as official (can also use PINCHBENCH_OFFICIAL_KEY env var)",
     )
     return parser.parse_args()
 
@@ -285,6 +296,128 @@ def _colorize_gradient(ascii_art: str) -> str:
         green_blue = int(255 * (1 - t))
         colored_lines.append(f"\x1b[38;2;255;{green_blue};{green_blue}m{line}\x1b[0m")
     return "\n".join(colored_lines)
+
+
+def _compute_efficiency_summary(
+    task_entries: List[Dict[str, Any]],
+    grades_by_task_id: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Compute aggregate token efficiency metrics across all tasks.
+
+    Returns a dict with total token usage, cost, and efficiency ratios
+    (score per token, score per dollar) so that different models can be
+    compared not just on quality but also on resource consumption.
+    """
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_tokens = 0
+    total_cost_usd = 0.0
+    total_requests = 0
+    total_execution_time = 0.0
+    tasks_with_usage = 0
+
+    per_task_efficiency: List[Dict[str, Any]] = []
+    for entry in task_entries:
+        usage = entry.get("usage", {})
+        task_id = entry["task_id"]
+        grading = grades_by_task_id.get(task_id, {})
+        score = float(grading.get("mean", 0.0))
+
+        inp = int(usage.get("input_tokens", 0))
+        out = int(usage.get("output_tokens", 0))
+        tot = int(usage.get("total_tokens", 0))
+        cost = float(usage.get("cost_usd", 0.0) or 0.0)
+        reqs = int(usage.get("request_count", 0))
+        exec_time = float(entry.get("execution_time", 0.0) or 0.0)
+
+        total_input_tokens += inp
+        total_output_tokens += out
+        total_tokens += tot
+        total_cost_usd += cost
+        total_requests += reqs
+        total_execution_time += exec_time
+
+        if tot > 0:
+            tasks_with_usage += 1
+
+        per_task_efficiency.append({
+            "task_id": task_id,
+            "score": round(score, 4),
+            "total_tokens": tot,
+            "cost_usd": round(cost, 6),
+            "tokens_per_score_point": round(tot / score, 1) if score > 0 else None,
+        })
+
+    # Aggregate scores
+    all_scores = [
+        float(g.get("mean", 0.0)) for g in grades_by_task_id.values()
+    ]
+    total_score = sum(all_scores)
+    num_tasks = len(all_scores)
+
+    summary: Dict[str, Any] = {
+        "total_tokens": total_tokens,
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "total_cost_usd": round(total_cost_usd, 6),
+        "total_requests": total_requests,
+        "total_execution_time_seconds": round(total_execution_time, 2),
+        "tasks_with_usage_data": tasks_with_usage,
+        "tokens_per_task": round(total_tokens / num_tasks, 1) if num_tasks > 0 else 0,
+        "cost_per_task_usd": round(total_cost_usd / num_tasks, 6) if num_tasks > 0 else 0,
+        "score_per_1k_tokens": (
+            round(total_score / (total_tokens / 1000), 6)
+            if total_tokens > 0
+            else None
+        ),
+        "score_per_dollar": (
+            round(total_score / total_cost_usd, 4)
+            if total_cost_usd > 0
+            else None
+        ),
+        "per_task": per_task_efficiency,
+    }
+    return summary
+
+
+def _log_efficiency_summary(
+    efficiency: Dict[str, Any],
+    grades_by_task_id: Dict[str, Dict[str, Any]],
+) -> None:
+    """Log a human-readable token efficiency summary."""
+    all_scores = [
+        float(g.get("mean", 0.0)) for g in grades_by_task_id.values()
+    ]
+    mean_score = statistics.mean(all_scores) if all_scores else 0.0
+
+    logger.info("\n%s", "=" * 80)
+    logger.info("📊 TOKEN EFFICIENCY SUMMARY")
+    logger.info("%s", "=" * 80)
+    logger.info(
+        "   Total tokens used: %s (input: %s, output: %s)",
+        f"{efficiency['total_tokens']:,}",
+        f"{efficiency['total_input_tokens']:,}",
+        f"{efficiency['total_output_tokens']:,}",
+    )
+    logger.info("   Total API requests: %s", f"{efficiency['total_requests']:,}")
+    if efficiency["total_cost_usd"] > 0:
+        logger.info("   Total cost: $%.4f", efficiency["total_cost_usd"])
+    logger.info(
+        "   Avg tokens/task: %s",
+        f"{efficiency['tokens_per_task']:,.0f}",
+    )
+    logger.info("   Mean score: %.4f", mean_score)
+    if efficiency.get("score_per_1k_tokens") is not None:
+        logger.info(
+            "   Score per 1K tokens: %.4f (higher = more efficient)",
+            efficiency["score_per_1k_tokens"],
+        )
+    if efficiency.get("score_per_dollar") is not None:
+        logger.info(
+            "   Score per dollar: %.4f (higher = more cost-efficient)",
+            efficiency["score_per_dollar"],
+        )
+    logger.info("%s", "=" * 80)
 
 
 def main():
@@ -398,9 +531,7 @@ def main():
                 )
             except Exception as exc:
                 execution_error = str(exc)
-                logger.warning(
-                    "Task execution failed for %s, continuing: %s", task.task_id, exc
-                )
+                logger.warning("Task execution failed for %s, continuing: %s", task.task_id, exc)
                 result = {
                     "agent_id": agent_id,
                     "task_id": task.task_id,
@@ -415,9 +546,10 @@ def main():
                     "stderr": execution_error,
                 }
             try:
-                # Small delay to ensure any pending file writes are flushed to disk
-                time.sleep(2)
-                grade = grade_task(task=task, execution_result=result, skill_dir=skill_dir, verbose=args.verbose)
+                grade_kwargs = dict(task=task, execution_result=result, skill_dir=skill_dir, verbose=args.verbose)
+                if args.judge:
+                    grade_kwargs["judge_model"] = args.judge
+                grade = grade_task(**grade_kwargs)
             except Exception as exc:
                 if execution_error:
                     note = f"Execution failed: {execution_error}; Grading failed: {exc}"
@@ -437,7 +569,9 @@ def main():
 
             # Log score immediately after grading
             score_pct = grade.score / grade.max_score * 100 if grade.max_score > 0 else 0
-            status_emoji = "✅" if grade.score >= grade.max_score else "⚠️" if grade.score > 0 else "❌"
+            status_emoji = (
+                "✅" if grade.score >= grade.max_score else "⚠️" if grade.score > 0 else "❌"
+            )
             logger.info(
                 "%s Task %s: %.1f/%.1f (%.0f%%) - %s",
                 status_emoji,
@@ -461,6 +595,24 @@ def main():
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    task_entries = [
+        {
+            "task_id": result["task_id"],
+            "status": result["status"],
+            "timed_out": result["timed_out"],
+            "execution_time": result["execution_time"],
+            "transcript_length": len(result["transcript"]),
+            "usage": result.get("usage", {}),
+            "workspace": result["workspace"],
+            "grading": grades_by_task_id[result["task_id"]],
+            "frontmatter": tasks_by_id[result["task_id"]].frontmatter,
+        }
+        for result in results
+    ]
+
+    efficiency = _compute_efficiency_summary(task_entries, grades_by_task_id)
+
     aggregate = {
         "model": args.model,
         "benchmark_version": _get_git_version(skill_root),
@@ -468,33 +620,22 @@ def main():
         "timestamp": time.time(),
         "suite": args.suite,
         "runs_per_task": runs_per_task,
-        "tasks": [
-            {
-                "task_id": result["task_id"],
-                "status": result["status"],
-                "timed_out": result["timed_out"],
-                "execution_time": result["execution_time"],
-                "transcript_length": len(result["transcript"]),
-                "usage": result.get("usage", {}),
-                "workspace": result["workspace"],
-                "grading": grades_by_task_id[result["task_id"]],
-                "frontmatter": tasks_by_id[result["task_id"]].frontmatter,
-            }
-            for result in results
-        ],
+        "tasks": task_entries,
+        "efficiency": efficiency,
     }
 
     output_path = output_dir / f"{run_id}_{model_slug}.json"
     output_path.write_text(json.dumps(aggregate, indent=2), encoding="utf-8")
 
     logger.info("Saved results to %s", output_path)
+    _log_efficiency_summary(efficiency, grades_by_task_id)
     if args.no_upload:
         logger.info("Skipping upload (--no-upload)")
     else:
         try:
             from lib_upload import UploadError, upload_results
 
-            result = upload_results(output_path)
+            result = upload_results(output_path, official_key=args.official_key)
             if result.rank is not None:
                 logger.info("Uploaded to leaderboard: rank #%s", result.rank)
             if result.leaderboard_url:

@@ -9,14 +9,14 @@ workspace_files: []
 
 ## Prompt
 
-Find 5 upcoming tech conferences in 2024 and create events.md with name, date, location, and website for each.
+Find 5 upcoming tech conferences and create events.md with name, date, location, and website for each.
 
 ## Expected Behavior
 
 The agent should:
 
 1. Use web search or research tools to find legitimate tech conferences
-2. Identify 5 conferences happening in 2024 (or upcoming if run in a different year)
+2. Identify 5 conferences happening this year
 3. Extract key information: name, date, location, website
 4. Create a file named `events.md` with this information
 5. Format the information clearly and consistently
