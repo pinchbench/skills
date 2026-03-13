@@ -37,8 +37,8 @@ def _get_agent_workspace(agent_id: str) -> Path | None:
             return None
 
         # Parse the agent list output to find workspace
-        # OpenClaw normalizes colons to dashes in agent names, so check both.
-        normalized_id = agent_id.replace(":", "-")
+        # OpenClaw normalizes colons to dashes and lowercases agent names
+        normalized_id = agent_id.replace(":", "-").lower()
         lines = list_result.stdout.split("\n")
         found_agent = False
         for line in lines:
@@ -93,9 +93,9 @@ def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bo
                 # Extract agent name: "- bench-foo-4-5" or "- main (default)"
                 name_part = line[2:].split()[0] if line[2:].strip() else ""
                 if name_part:
-                    existing_agents.add(name_part)
-        normalized_id = agent_id.replace(":", "-")
-        if agent_id in existing_agents or normalized_id in existing_agents:
+                    existing_agents.add(name_part.lower())
+        normalized_id = agent_id.replace(":", "-").lower()
+        if agent_id.lower() in existing_agents or normalized_id in existing_agents:
             # Agent exists — check if workspace matches
             current_workspace = _get_agent_workspace(agent_id)
             if (
@@ -208,15 +208,44 @@ def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task, agent_id: s
             logger.error("Workspace file not found: %s", source)
             raise
 
+    # Remove bootstrap files that would trigger the onboarding flow
+    # These interfere with benchmark tasks
+    for bootstrap_file in ["BOOTSTRAP.md", "SOUL.md", "USER.md", "IDENTITY.md"]:
+        bootstrap_path = workspace / bootstrap_file
+        if bootstrap_path.exists():
+            try:
+                bootstrap_path.unlink()
+                logger.info("Removed bootstrap file: %s", bootstrap_file)
+            except OSError as exc:
+                logger.warning("Failed to remove %s: %s", bootstrap_file, exc)
+
+    # Copy skills from main workspace to benchmark workspace
+    # This enables benchmark agents to use installed skills like nano-pdf
+    main_skills_dir = Path.home() / ".openclaw" / "workspace" / "skills"
+    if main_skills_dir.exists():
+        dest_skills_dir = workspace / "skills"
+        dest_skills_dir.mkdir(parents=True, exist_ok=True)
+        for skill_dir_src in main_skills_dir.iterdir():
+            if skill_dir_src.is_dir():
+                dest_skill_dir = dest_skills_dir / skill_dir_src.name
+                # Copy skill directory
+                import shutil
+                if dest_skill_dir.exists():
+                    shutil.rmtree(dest_skill_dir)
+                shutil.copytree(skill_dir_src, dest_skill_dir)
+                logger.info("Copied skill to benchmark workspace: %s", skill_dir_src.name)
+
     return workspace
 
 
 def _get_agent_store_dir(agent_id: str) -> Path:
     base_dir = Path.home() / ".openclaw" / "agents"
+    # OpenClaw normalizes agent IDs to lowercase and replaces colons with dashes
+    normalized_id = agent_id.replace(":", "-").lower()
     direct_dir = base_dir / agent_id
     if direct_dir.exists():
         return direct_dir
-    normalized_dir = base_dir / agent_id.replace(":", "-")
+    normalized_dir = base_dir / normalized_id
     if normalized_dir.exists():
         return normalized_dir
     return direct_dir
@@ -235,7 +264,7 @@ def _resolve_session_id_from_store(agent_id: str) -> str | None:
     if not isinstance(sessions_payload, dict):
         return None
 
-    normalized_id = agent_id.replace(":", "-")
+    normalized_id = agent_id.replace(":", "-").lower()
     preferred_keys = [
         f"agent:{agent_id}:main",
         f"agent:{agent_id}:default",
